@@ -22,6 +22,7 @@ def test_minimal_device_gets_defaults_and_id() -> None:
         "secureon": None,
         "auto": [],
         "home_gateway": None,
+        "home_gateway_mac": None,
     }
 
 
@@ -421,3 +422,88 @@ def test_stored_device_with_other_bad_field_is_still_dropped() -> None:
     kept, dropped = devices.sanitise_stored([device(1, host="bad host", mac="x"), device(2)])
     assert dropped == 1
     assert [d["id"] for d in kept] == ["pc-2"]
+
+
+# -- home_gateway_mac (the router's hardware address) -------------------------
+
+ON_HOME = {"iface": "wlan0", "gateway": "192.168.1.1", "gateway_mac": "aa:bb:cc:dd:ee:0a"}
+
+
+def _without_gateway_mac(**overrides):
+    raw = device(1, **{"home_gateway": "192.168.1.1", **overrides})
+    del raw["home_gateway_mac"]
+    return raw
+
+
+def test_gateway_mac_captured_when_key_absent_on_home_network() -> None:
+    [d] = devices.validate_devices([_without_gateway_mac()], current=ON_HOME)
+    assert d["home_gateway_mac"] == "aa:bb:cc:dd:ee:0a"
+
+
+def test_gateway_mac_not_captured_on_another_network_or_unknown() -> None:
+    elsewhere = {**ON_HOME, "gateway": "198.51.100.1"}
+    unknown = {**ON_HOME, "gateway_mac": None}
+    for current in (elsewhere, unknown, None):
+        [d] = devices.validate_devices([_without_gateway_mac()], current=current)
+        assert d["home_gateway_mac"] is None
+
+
+def test_gateway_mac_preserved_from_stored_when_key_absent() -> None:
+    stored = [device(1, home_gateway="192.168.1.1", home_gateway_mac="aa:bb:cc:dd:ee:0c")]
+    [d] = devices.validate_devices([_without_gateway_mac()], stored=stored, current=ON_HOME)
+    assert d["home_gateway_mac"] == "aa:bb:cc:dd:ee:0c"
+    # A changed home gateway doesn't inherit the old router's MAC.
+    moved = _without_gateway_mac(home_gateway="198.51.100.1")
+    [d] = devices.validate_devices([moved], stored=stored, current=ON_HOME)
+    assert d["home_gateway_mac"] is None
+
+
+def test_gateway_mac_explicit_null_and_value() -> None:
+    stored = [device(1, home_gateway="192.168.1.1", home_gateway_mac="aa:bb:cc:dd:ee:0c")]
+    cleared = device(1, home_gateway="192.168.1.1", home_gateway_mac=None)
+    [d] = devices.validate_devices([cleared], stored=stored, current=ON_HOME)
+    assert d["home_gateway_mac"] is None
+    given = device(1, home_gateway="192.168.1.1", home_gateway_mac="AA-BB-CC-DD-EE-0D")
+    [d] = devices.validate_devices([given], stored=stored, current=ON_HOME)
+    assert d["home_gateway_mac"] == "aa:bb:cc:dd:ee:0d"
+
+
+def test_gateway_mac_dropped_without_home_gateway() -> None:
+    raw = device(1, home_gateway=None, home_gateway_mac="not a mac")
+    [d] = devices.validate_devices([raw], current=ON_HOME)
+    assert d["home_gateway_mac"] is None
+    [d] = devices.validate_devices([{**raw, "home_gateway": ""}], current=ON_HOME)
+    assert d["home_gateway_mac"] is None
+
+
+def test_bad_gateway_mac_is_a_field_error() -> None:
+    raw = device(1, home_gateway="192.168.1.1", home_gateway_mac="zz:bb:cc:dd:ee:0a")
+    with pytest.raises(DeviceError) as err:
+        devices.validate_devices([raw])
+    assert (err.value.field, err.value.index) == ("home_gateway_mac", 0)
+
+
+def test_stored_device_without_gateway_mac_loads_as_null() -> None:
+    raw = device(1, home_gateway="192.168.1.1")
+    del raw["home_gateway_mac"]
+    [d], dropped = devices.sanitise_stored([raw])
+    assert (d["home_gateway_mac"], dropped) == (None, 0)
+
+
+def test_stored_bad_gateway_mac_is_reset_not_dropped() -> None:
+    raw = device(1, home_gateway="192.168.1.1", home_gateway_mac="bogus")
+    [d], dropped = devices.sanitise_stored([raw])
+    assert (d["id"], d["home_gateway_mac"], dropped) == ("pc-1", None, 1)
+
+
+def test_gateway_mac_exported_and_imported() -> None:
+    saved = [device(1, home_gateway="192.168.1.1", home_gateway_mac="aa:bb:cc:dd:ee:0c")]
+    text = devices.export_json(saved)
+    assert json.loads(text)["devices"][0]["home_gateway_mac"] == "aa:bb:cc:dd:ee:0c"
+    assert devices.import_devices(text, "replace", []) == saved
+    # An old export without the field keeps the saved MAC on merge.
+    old = json.dumps({"version": 1, "devices": [_without_gateway_mac()]})
+    [d] = devices.import_devices(old, "merge", saved, current=ON_HOME)
+    assert d["home_gateway_mac"] == "aa:bb:cc:dd:ee:0c"
+    [d] = devices.import_devices(old, "replace", [], current=ON_HOME)
+    assert d["home_gateway_mac"] == "aa:bb:cc:dd:ee:0a"

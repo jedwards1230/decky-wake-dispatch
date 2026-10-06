@@ -180,7 +180,9 @@ class Plugin:
 
     async def save_devices(self, devices_in: list[dict[str, Any]]) -> dict[str, Any]:
         try:
-            validated = devices.validate_devices(devices_in)
+            validated = devices.validate_devices(
+                devices_in, stored=_load_devices(), current=netinfo.current_network()
+            )
         except devices.DeviceError as exc:
             return exc.as_result()
         return _save(validated)
@@ -216,8 +218,8 @@ class Plugin:
     async def get_state(self, *_args: Any) -> dict[str, Any]:
         return _public_state(_load_state())
 
-    async def current_network(self, *_args: Any) -> dict[str, str] | None:
-        return netinfo.default_route()
+    async def current_network(self, *_args: Any) -> dict[str, Any] | None:
+        return netinfo.current_network()
 
     async def neighbours(self, *_args: Any) -> list[dict[str, Any]]:
         return await netinfo.neighbours()
@@ -236,7 +238,9 @@ class Plugin:
 
     async def import_config(self, text: str, mode: str) -> dict[str, Any]:
         try:
-            imported = devices.import_devices(text, mode, _load_devices())
+            imported = devices.import_devices(
+                text, mode, _load_devices(), current=netinfo.current_network()
+            )
         except devices.ConfigError as exc:
             return {"ok": False, "error": str(exc)}
         except devices.DeviceError as exc:

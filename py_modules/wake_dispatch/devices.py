@@ -37,7 +37,7 @@ _HOST_LABEL = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)")
 _STRIPPED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co"})
 # A stored device with a bad value in one of these fields is kept with the field
 # reset (a new id, no status check) instead of being dropped.
-_REPAIRABLE = {"id": "", "host": None, "status_port": None}
+_REPAIRABLE = {"id": "", "host": None, "status_port": None, "home_gateway_mac": None}
 _WHITESPACE = re.compile(r"\s+")
 IMPORT_MODES = ("replace", "merge")
 FIELDS = (
@@ -51,7 +51,9 @@ FIELDS = (
     "secureon",
     "auto",
     "home_gateway",
+    "home_gateway_mac",
 )
+GATEWAY_MAC = "home_gateway_mac"
 
 
 class DeviceError(ValueError):
@@ -223,6 +225,19 @@ def validate_device(raw: Any, index: int) -> dict[str, Any]:
         else _ipv4(home_gateway, index, "home_gateway", "The home gateway")
     )
 
+    # The router's hardware address only means something with a home gateway;
+    # without one it is dropped silently (not validated).
+    gateway_mac = raw.get(GATEWAY_MAC)
+    if home_gateway is None or _blank(gateway_mac):
+        gateway_mac = None
+    else:
+        try:
+            gateway_mac = normalise_mac(gateway_mac)
+        except MacError as exc:
+            raise _fail(
+                index, GATEWAY_MAC, f"The home router's hardware address isn't valid. {exc}"
+            ) from None
+
     return {
         "id": device_id,
         "name": name,
@@ -234,7 +249,37 @@ def validate_device(raw: Any, index: int) -> dict[str, Any]:
         "secureon": secureon,
         "auto": auto,
         "home_gateway": home_gateway,
+        GATEWAY_MAC: gateway_mac,
     }
+
+
+def fill_gateway_macs(
+    raw: list[Any],
+    devices: list[dict[str, Any]],
+    stored: list[dict[str, Any]] | None,
+    current: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Fill ``home_gateway_mac`` for devices whose input left the key out.
+
+    ``raw[i]`` is the input that ``devices[i]`` was validated from. An explicit
+    value (or ``null``) is kept as validated. With the key absent and a
+    ``home_gateway`` set: keep the MAC of the saved device with the same id (or,
+    failing that, the same MAC) when it has the same ``home_gateway``; else, when
+    ``home_gateway`` is the current router (``current`` = ``{gateway,
+    gateway_mac}``, see ``netinfo.current_network``) and its MAC is known,
+    capture that; else ``None``.
+    """
+    by_id = {d.get("id"): d for d in stored or [] if d.get("id")}
+    by_mac = {d.get("mac"): d for d in stored or [] if d.get("mac")}
+    for item, device in zip(raw, devices, strict=True):
+        if not isinstance(item, dict) or GATEWAY_MAC in item or not device["home_gateway"]:
+            continue
+        saved = (by_id.get(device["id"]) if device["id"] else None) or by_mac.get(device["mac"])
+        if saved and saved.get("home_gateway") == device["home_gateway"] and saved.get(GATEWAY_MAC):
+            device[GATEWAY_MAC] = saved[GATEWAY_MAC]
+        elif current and current.get("gateway") == device["home_gateway"]:
+            device[GATEWAY_MAC] = current.get("gateway_mac")
+    return devices
 
 
 def _slug(name: str) -> str:
@@ -294,13 +339,22 @@ def _too_many() -> str:
     return f"You can save at most {MAX_DEVICES} devices."
 
 
-def validate_devices(raw: Any) -> list[dict[str, Any]]:
-    """Validate a whole device list, reject duplicate ids and MACs, then fill in missing ids."""
+def validate_devices(
+    raw: Any,
+    *,
+    stored: list[dict[str, Any]] | None = None,
+    current: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Validate a whole device list, reject duplicate ids and MACs, then fill in missing ids.
+
+    ``stored`` and ``current`` feed ``fill_gateway_macs``.
+    """
     if not isinstance(raw, list):
         raise DeviceError("Expected a list of devices.")
     if len(raw) > MAX_DEVICES:
         raise DeviceError(_too_many())
     devices = [validate_device(item, index) for index, item in enumerate(raw)]
+    fill_gateway_macs(raw, devices, stored, current)
     _check_unique_ids(devices)
     _check_unique_macs(devices)
     return _assign_ids(devices)
@@ -445,8 +499,17 @@ def merge_devices(
     return merged
 
 
-def import_devices(text: Any, mode: Any, existing: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def import_devices(
+    text: Any,
+    mode: Any,
+    existing: list[dict[str, Any]],
+    *,
+    current: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     """Return the device list that results from importing ``text`` in ``mode``.
+
+    ``home_gateway_mac`` left out of an imported device is filled as in
+    ``fill_gateway_macs`` (against ``existing`` and ``current``).
 
     Raises ``ConfigError`` (unreadable input) or ``DeviceError`` (an invalid device;
     ``index`` refers to the imported list).
@@ -457,6 +520,7 @@ def import_devices(text: Any, mode: Any, existing: list[dict[str, Any]]) -> list
     if len(raw) > MAX_DEVICES:
         raise ConfigError(f"That config has {len(raw)} devices; the limit is {MAX_DEVICES}.")
     incoming = [validate_device(item, index) for index, item in enumerate(raw)]
+    fill_gateway_macs(raw, incoming, existing, current)
     _check_unique_ids(incoming)
     _check_unique_macs(incoming)
     if mode == "replace":

@@ -37,9 +37,12 @@ path the same way Decky does.
 - `test_devices.py`: device validation (id alphabet, name cleaning of bidi,
   zero-width, surrogate and private-use characters and NFC, host syntax), repairing
   stored devices whose id or status host fails the rules, id generation, the 64-device and
-  256 KiB import limits, export, import merge and replace.
-- `test_netinfo.py`: route and ARP parsing, interface state, the daemon-thread name
-  lookups (timeouts, queueing beyond the thread limit, stuck threads, a thread that
+  256 KiB import limits, export, import merge and replace, and `home_gateway_mac`
+  (capture when absent, kept from the saved device, explicit null or value, dropped
+  without a home gateway, field errors, old files load as null).
+- `test_netinfo.py`: route and ARP parsing, the router's MAC (complete vs incomplete
+  entries, wrong interface, missing) and `current_network`, interface state, the
+  daemon-thread name lookups (timeouts, queueing beyond the thread limit, stuck threads, a thread that
   can't start, late answers and answers after the loop closed, cache limits, shutdown,
   a subprocess whose lookup hangs still exits at once), and the status mapping
   (refused -> awake, no route or slow lookup -> unknown, timeout -> asleep,
@@ -50,8 +53,9 @@ path the same way Decky does.
   ARP polling, names, busy and cancel), the mDNS packet
   parser's bounds, name preference, the busy lock, cooldown, cancel and time budget,
   and that `_unload` never yields while a scan or find is pending.
-- `test_dispatch.py`: device selection, the home-gateway gate, bursts, outcomes and
-  reasons, per-device error isolation.
+- `test_dispatch.py`: device selection, the home-network gate (gateway IP, then the
+  router's MAC when stored and known, IP-only fallback, one ARP read per wake), bursts,
+  outcomes and reasons, per-device error isolation.
 - `test_automation.py`: the boot gate and the resume watcher, driven by injected clocks
   and sleeps, and the synchronous `cancel`.
 - `test_updates.py`: the update check with an injected fetch and clock: strict release

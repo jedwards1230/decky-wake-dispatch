@@ -81,9 +81,13 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
   route first, because the boot gate may only record the boot id once the network is up
   (otherwise a boot without network never wakes); manual selects devices first so
   "nothing to wake" returns instantly. Keep the order when refactoring `Dispatcher._run`.
-- **The home-network gate is the router's IP address, checked once per wake.** Another
-  network with the same gateway address counts as home, and a network change during the
-  burst isn't re-checked. Document it, don't pretend otherwise.
+- **The home-network gate is the router's IP address plus, when known, its MAC, checked
+  once per wake.** ARP may not have re-resolved the router right after resume, so an
+  unknown current MAC falls back to the IP check alone (another network with the same
+  gateway address then counts as home), and a network change during the burst isn't
+  re-checked. Document it, don't pretend otherwise. The MAC is captured on save by the
+  backend when the input omits `home_gateway_mac`, so `src/store.ts` must not send a
+  stale saved value back for a draft that didn't set it.
 - **Scan and find run only when the user presses Scan or Find.** Never call
   `discovery.scan_network` or `discovery.find_host` from automation or when the Quick
   Access panel opens, and don't store what they find. A find sends at most one packet,

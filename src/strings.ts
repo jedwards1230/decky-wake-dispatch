@@ -132,7 +132,7 @@ export const EDITOR = {
   homeOnly: "Only on my home network",
   homeOnlyOff: "Off: automatic wakes are sent on any network.",
   homeOnlyOn: (gw: string) =>
-    `Only when connected through router ${gw} (your current network). Other networks with the same router address also count.`,
+    `Only when connected through router ${gw} (your current network). The router's hardware address is checked too when it's known.`,
   homeOnlyAutoOn: "Turned on for your current network. Turn off to wake on any network.",
   homeOnlyNeedsTrigger: "Turn on an automatic wake first.",
   homeOnlyNoNetwork: "Not connected to a network right now. Connect to your home network, then turn this on.",

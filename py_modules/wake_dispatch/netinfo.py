@@ -199,6 +199,31 @@ def parse_arp(text: str) -> list[dict[str, str]]:
     return entries
 
 
+def gateway_mac(
+    route: dict[str, str] | None, arp_path: str | None = None, reader: Reader | None = None
+) -> str | None:
+    """The router's MAC: the complete ARP entry for ``route``'s gateway on its interface.
+
+    ``None`` without a route, or when ARP has no complete entry for it yet (right
+    after resume the kernel may not have re-resolved the router).
+    """
+    if not route:
+        return None
+    text = (reader or read_text)(arp_path or PROC_ARP)
+    for entry in parse_arp(text or ""):
+        if entry["ip"] == route.get("gateway") and entry["iface"] == route.get("iface"):
+            return entry["mac"]
+    return None
+
+
+def current_network(reader: Reader | None = None) -> dict[str, Any] | None:
+    """``{iface, gateway, gateway_mac}`` for the default route, or ``None``."""
+    route = default_route(reader=reader)
+    if route is None:
+        return None
+    return {**route, "gateway_mac": gateway_mac(route, reader=reader)}
+
+
 _OK, _FAILED, _TIMED_OUT = "ok", "failed", "timed out"
 
 

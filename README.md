@@ -111,10 +111,12 @@ boot, 20 seconds after resume) and send a short burst of packets over about 20 s
 in case the network is still settling.
 
 **Only on my home network** limits automatic wakes to the network you are on when you
-turn it on. The plugin remembers your current router's address (the default gateway) and
-only sends automatic wakes when you are connected through a router with that address. It
-does not identify your network any other way, so a different network that happens to use
-the same router address also counts. When it is off, automatic wakes are sent on any
+turn it on. The plugin remembers your current router's address (the default gateway)
+and, when it can see it, the router's hardware (MAC) address, and only sends automatic
+wakes when you are connected through a router that matches. If the router's hardware
+address can't be read at the time of a wake (for example just after waking from sleep),
+only its address is checked, so a different network that happens to use the same router
+address can still count as home then. When it is off, automatic wakes are sent on any
 network. If you are connected when you first enable an automatic wake, it is turned on
 for your current network automatically.
 

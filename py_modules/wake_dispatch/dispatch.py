@@ -9,7 +9,8 @@ Outcome rules (``DispatchRecord.outcome``):
 - ``failed``: no device got a packet out and at least one errored.
 - ``partial``: anything else (some sent, others errored or were skipped). The
   reason says which: "Some devices couldn't be woken" if anything errored,
-  otherwise "Some devices weren't on their home network" (or the generic
+  otherwise "Some devices weren't on their home network" (when every skip was
+  "Not on home network" or "Different network (same router address)"; else the generic
   "Some devices were skipped").
 
 A device counts as ``sent`` if any packet of its burst was sent; if every
@@ -18,7 +19,14 @@ attempt failed it is ``error`` with the plain-language message of the last failu
 Order of work: a manual wake selects devices first (nothing to wake -> no wait),
 then waits for a route. An automatic wake waits for a route first (the boot gate
 must only record a boot once the network is up), then selects opted-in devices
-and applies the home-gateway gate.
+and applies the home-network gate.
+
+Home-network gate (automatic wakes only): a device with ``home_gateway`` set is
+skipped "Not on home network" when the current gateway's IP differs. When the IP
+matches, the device has a ``home_gateway_mac`` and the current router's MAC is
+known (from ARP, read once per wake), a different MAC skips it "Different
+network (same router address)". An unknown current MAC (ARP may not have the
+router yet right after resume) falls back to the IP check alone.
 """
 
 from __future__ import annotations
@@ -43,6 +51,7 @@ AUTO_BURST: tuple[float, ...] = (0, 2, 5, 10, 20)
 NETWORK_WAIT: dict[str, float] = {"manual": 5, "boot": 60, "resume": 20}
 
 NOT_HOME = "Not on home network"
+OTHER_NETWORK = "Different network (same router address)"
 NO_OPT_IN = "No devices opted in"
 NO_DEVICES = "No devices configured"
 NO_MATCH = "None of the chosen devices exist"
@@ -97,7 +106,8 @@ def summarise(results: dict[str, dict[str, Any]]) -> tuple[str, str | None]:
     if "error" in statuses:
         return "partial", SOME_FAILED
     skip_reasons = {r.get("error") for r in results.values() if r["status"] == "skipped"}
-    return "partial", SOME_NOT_HOME if skip_reasons == {NOT_HOME} else SOME_SKIPPED
+    not_home = skip_reasons <= {NOT_HOME, OTHER_NETWORK}
+    return "partial", SOME_NOT_HOME if not_home else SOME_SKIPPED
 
 
 class Dispatcher:
@@ -118,6 +128,7 @@ class Dispatcher:
         monotonic: Callable[[], float] = time.monotonic,
         bursts: dict[str, tuple[float, ...]] | None = None,
         network_wait: dict[str, float] | None = None,
+        gateway_mac: Callable[[dict[str, str]], str | None] | None = None,
     ) -> None:
         self._load_devices = load_devices
         self._load_state = load_state
@@ -130,6 +141,7 @@ class Dispatcher:
         self._monotonic = monotonic
         self._bursts = bursts
         self._network_wait = network_wait
+        self._gateway_mac = gateway_mac
         self._locks = {trigger: asyncio.Lock() for trigger in AUTO_TRIGGERS}
 
     # -- configuration lookups -------------------------------------------------
@@ -266,13 +278,15 @@ class Dispatcher:
                 return await self._finish(self.record(trigger, "skipped", NO_OPT_IN))
             # Known v1 limitation: the gateway is checked once, before the burst;
             # a network change during the (up to 20 s) burst isn't re-checked.
+            router_mac = self._router_mac(trigger, route, devices)
             for device in devices:
-                gateway = device.get("home_gateway")
-                if gateway and gateway != route["gateway"]:
+                skip = self._home_gate(device, route, router_mac)
+                if skip is not None:
+                    get_logger().info("%s wake: skipping %s (%s)", trigger, device["id"], skip)
                     results[device["id"]] = {
                         "name": device.get("name", ""),
                         "status": "skipped",
-                        "error": NOT_HOME,
+                        "error": skip,
                     }
                 else:
                     targets.append(device)
@@ -291,6 +305,42 @@ class Dispatcher:
             results.update(await self._burst(trigger, targets))
         outcome, reason = summarise(results)
         return await self._finish(self.record(trigger, outcome, reason, results))
+
+    def _router_mac(
+        self, trigger: str, route: dict[str, str], devices: list[dict[str, Any]]
+    ) -> str | None:
+        """The current router's MAC, read once per wake and only when a device needs it."""
+        if not any(d.get("home_gateway_mac") for d in devices):
+            return None
+        try:
+            mac = (self._gateway_mac or netinfo.gateway_mac)(route)
+        except Exception as exc:
+            get_logger().error("Could not read the router's address: %s", exc)
+            mac = None
+        if mac is None:
+            get_logger().info(
+                "%s wake: router %s not in ARP yet; checking its IP only",
+                trigger,
+                route.get("gateway"),
+            )
+        else:
+            get_logger().info("%s wake: router %s is %s", trigger, route.get("gateway"), mac)
+        return mac
+
+    @staticmethod
+    def _home_gate(
+        device: dict[str, Any], route: dict[str, str], router_mac: str | None
+    ) -> str | None:
+        """The skip reason for ``device`` on this network, or ``None`` to wake it."""
+        gateway = device.get("home_gateway")
+        if not gateway:
+            return None
+        if gateway != route["gateway"]:
+            return NOT_HOME
+        expected = device.get("home_gateway_mac")
+        if expected and router_mac is not None and router_mac != expected:
+            return OTHER_NETWORK
+        return None
 
     async def _finish(self, record: dict[str, Any]) -> dict[str, Any]:
         get_logger().info(

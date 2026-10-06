@@ -9,7 +9,15 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from helpers import HOME_ROUTE, ROUTE_HEADER, route_line, write_network
+from helpers import (
+    ARP_HEADER,
+    HOME_ROUTE,
+    ROUTE_HEADER,
+    ROUTER_ARP,
+    arp_line,
+    route_line,
+    write_network,
+)
 
 from wake_dispatch import netinfo
 
@@ -657,3 +665,40 @@ async def test_name_caches_are_bounded(monkeypatch) -> None:
     for i in range(6):
         await netinfo.resolve_host(f"pc{i}.example", 1.0, lambda _h: "192.0.2.1")
     assert len(netinfo._address_cache) == 4
+
+
+def test_gateway_mac_complete_entry_on_the_route_interface() -> None:
+    text = (
+        ARP_HEADER
+        + arp_line("192.168.1.1", "aa:bb:cc:dd:ee:0b", iface="eth0")  # wrong interface
+        + arp_line("192.168.1.1", "AA:BB:CC:DD:EE:0A")
+    )
+    assert netinfo.gateway_mac(HOME, reader=lambda _p: text) == "aa:bb:cc:dd:ee:0a"
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        [("192.168.1.1", "aa:bb:cc:dd:ee:0a", "wlan0", "0x0")],  # incomplete
+        [("192.168.1.1", "00:00:00:00:00:00", "wlan0", "0x2")],  # zero MAC
+        [("192.168.1.1", "aa:bb:cc:dd:ee:0a", "eth0", "0x2")],  # other interface
+        [("192.168.1.2", "aa:bb:cc:dd:ee:0a", "wlan0", "0x2")],  # other address
+        [],  # missing
+    ],
+)
+def test_gateway_mac_unknown(lines) -> None:
+    text = ARP_HEADER + "".join(arp_line(*line) for line in lines)
+    assert netinfo.gateway_mac(HOME, reader=lambda _p: text) is None
+
+
+def test_gateway_mac_without_route_or_arp_file(sandbox) -> None:
+    assert netinfo.gateway_mac(None, reader=lambda _p: "unused") is None
+    assert netinfo.gateway_mac(HOME) is None  # the sandbox has no ARP file
+
+
+def test_current_network_includes_gateway_mac(sandbox) -> None:
+    assert netinfo.current_network() is None
+    write_network(sandbox["fake"], HOME_ROUTE, {"wlan0": "up"})
+    assert netinfo.current_network() == {**HOME, "gateway_mac": None}
+    (sandbox["fake"] / "arp").write_text(ROUTER_ARP)
+    assert netinfo.current_network() == {**HOME, "gateway_mac": "aa:bb:cc:dd:ee:0a"}

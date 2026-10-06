@@ -15,6 +15,8 @@ export interface Device {
   secureon: string | null;
   auto: AutoTrigger[];
   home_gateway: string | null;
+  /** The home router's MAC; null = unknown (IP-only gate). Omit on save to keep/capture it. */
+  home_gateway_mac: string | null;
 }
 
 export interface DeviceResult {
@@ -88,6 +90,7 @@ export type FindResult =
 export interface Network {
   iface: string;
   gateway: string;
+  gateway_mac: string | null; // the router's MAC from ARP, null when not resolved yet
 }
 
 export type Saved =

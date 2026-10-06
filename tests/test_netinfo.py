@@ -493,8 +493,20 @@ def _arp_lines(count: int) -> str:
     )
 
 
-async def test_neighbours_queue_beyond_the_thread_limit(sandbox) -> None:
+class _SlowReleaseSlots(threading.BoundedSemaphore):
+    """Thread slots whose release lags, widening the slot hand-off window."""
+
+    def release(self, n: int = 1) -> None:
+        time.sleep(0.05)
+        super().release(n)
+
+
+async def test_neighbours_queue_beyond_the_thread_limit(sandbox, monkeypatch) -> None:
     (sandbox["fake"] / "arp").write_text(_arp_lines(12))
+    # If a lookup delivered its answer before freeing its thread slot, the next
+    # queued caller would find every slot taken and give up; the lagging release
+    # makes that ordering bug fail every run instead of only under load.
+    monkeypatch.setattr(netinfo, "_lookup_slots", _SlowReleaseSlots(netinfo.LOOKUP_THREADS))
     running = 0
     peak = 0
     lock = threading.Lock()
@@ -504,12 +516,11 @@ async def test_neighbours_queue_beyond_the_thread_limit(sandbox) -> None:
         with lock:
             running += 1
             peak = max(peak, running)
-        time.sleep(0.02)
         with lock:
             running -= 1
         return (f"pc-{ip.rsplit('.', 1)[1]}.example", [], [ip])
 
-    result = await netinfo.neighbours(resolver=resolver, timeout=2.0)
+    result = await netinfo.neighbours(resolver=resolver, timeout=10.0)
     assert [n["hostname"] for n in result] == [f"pc-{i}.example" for i in range(1, 13)]
     assert peak <= netinfo.LOOKUP_THREADS
 

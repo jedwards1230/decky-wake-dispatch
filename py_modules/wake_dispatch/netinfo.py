@@ -250,14 +250,15 @@ async def _start_and_wait(
 
     def work() -> None:
         try:
-            try:
-                outcome: tuple[str, Any] = (_OK, func(arg))
-            except Exception as exc:
-                outcome = (_FAILED, exc)
-            with contextlib.suppress(RuntimeError):  # the loop is closed
-                loop.call_soon_threadsafe(deliver, outcome)
+            outcome: tuple[str, Any] = (_OK, func(arg))
+        except Exception as exc:
+            outcome = (_FAILED, exc)
         finally:
+            # Free the slot before delivering: the delivery lets the next queued
+            # caller in, and it must find a slot free, not one about to be.
             slots.release()
+        with contextlib.suppress(RuntimeError):  # the loop is closed
+            loop.call_soon_threadsafe(deliver, outcome)
 
     thread = threading.Thread(target=work, name="wd-lookup", daemon=True)
     try:

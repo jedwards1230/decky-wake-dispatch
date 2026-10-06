@@ -177,7 +177,6 @@ logger: logging.Logger
 """
 Event handling
 """
-# TODO better docstring im lazy
 async def emit(event: str, *args: Any) -> None:
     """
     Send an event to the frontend.

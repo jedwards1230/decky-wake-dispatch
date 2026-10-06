@@ -26,8 +26,9 @@ path the same way Decky does.
   plugin settings, runtime and log directories at a fresh temp directory per test, and
   sandboxes every test: `/proc/net/route`, `/proc/net/arp`, `/sys/class/net` and the boot
   id are redirected to empty fake files, the UDP socket is replaced by a recorder
-  (`helpers.FakeSocket`), and any real name lookup fails the test unless it is marked
-  `real_dns`.
+  (`helpers.FakeSocket`), `discovery.make_socket` raises so a test that would open a
+  real scan or mDNS socket fails, and any real name lookup fails the test unless it is
+  marked `real_dns`.
 - `test_mac_packet.py`: MAC and SecureOn normalisation, magic packet bytes (102 / 108),
   socket options.
 - `test_storage.py`: atomic writes, migration of old settings shapes, corrupt-file
@@ -43,6 +44,12 @@ path the same way Decky does.
   a subprocess whose lookup hangs still exits at once), and the status mapping
   (refused -> awake, no route or slow lookup -> unknown, timeout -> asleep,
   `EHOSTUNREACH` depending on the default route, connecting to the numeric address).
+- `test_discovery.py`: scan targets (prefix sizes, refused networks, VPN interfaces),
+  probe pacing and route-change aborts with fake sockets and sleeps, find-by-address
+  (input checks, off-link refusal with zero sends, ARP hits, the single probe and its
+  ARP polling, names, busy and cancel), the mDNS packet
+  parser's bounds, name preference, the busy lock, cooldown, cancel and time budget,
+  and that `_unload` never yields while a scan or find is pending.
 - `test_dispatch.py`: device selection, the home-gateway gate, bursts, outcomes and
   reasons, per-device error isolation.
 - `test_automation.py`: the boot gate and the resume watcher, driven by injected clocks

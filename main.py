@@ -26,6 +26,7 @@ import decky
 from wake_dispatch import (
     automation,
     devices,
+    discovery,
     dispatch,
     log,
     mac,
@@ -35,7 +36,18 @@ from wake_dispatch import (
     updates,
 )
 
-_IMPORTED = (log, mac, packet, storage, devices, netinfo, dispatch, automation, updates)
+_IMPORTED = (
+    log,
+    mac,
+    packet,
+    storage,
+    devices,
+    netinfo,
+    dispatch,
+    automation,
+    updates,
+    discovery,
+)
 
 # (path, sha256 of contents) of settings files already backed up by this process,
 # so a rewrite that keeps failing doesn't add a new backup on every read.
@@ -210,6 +222,15 @@ class Plugin:
     async def neighbours(self, *_args: Any) -> list[dict[str, Any]]:
         return await netinfo.neighbours()
 
+    async def scan_network(self, confirm_away: bool = False, *_args: Any) -> dict[str, Any]:
+        return await discovery.scan_network(confirm_away is True, devices=_load_devices())
+
+    async def cancel_scan(self, *_args: Any) -> dict[str, Any]:
+        return {"ok": True, "cancelled": discovery.cancel()}
+
+    async def find_host(self, address: Any = None, *_args: Any) -> dict[str, Any]:
+        return await discovery.find_host(address)
+
     async def export_config(self, *_args: Any) -> str:
         return devices.export_json(_load_devices())
 
@@ -246,6 +267,8 @@ class Plugin:
         # Never await here (AGENTS.md): Decky 3.2's socket listener can spin
         # the loop once the loader hangs up, so a yield may never resume and
         # Decky SIGKILLs the process after 5 s.
+        discovery.cancel()  # sync: never yield in _unload
+        discovery.cancel_find()
         if self._automation is not None:
             self._automation.cancel()
         netinfo.shutdown_resolver()

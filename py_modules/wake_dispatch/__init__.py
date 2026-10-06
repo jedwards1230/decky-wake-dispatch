@@ -10,6 +10,7 @@
 - ``dispatch``: the ``Dispatcher`` (gating, bursts, records, error mapping).
 - ``automation``: boot gate and resume watcher.
 - ``updates``: the once-a-day check for a newer release on GitHub.
+- ``discovery``: user-initiated network scan, mDNS names, find by IP or hostname.
 """
 
 MODULES = (
@@ -22,4 +23,5 @@ MODULES = (
     "dispatch",
     "automation",
     "updates",
+    "discovery",
 )

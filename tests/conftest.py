@@ -56,7 +56,7 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[st
     procfs/sysfs paths point into ``tmp_path/fake`` (initially empty, i.e. no
     route, no ARP entries, no boot id) and the UDP socket factory is a recorder.
     """
-    from wake_dispatch import netinfo, packet, updates
+    from wake_dispatch import discovery, netinfo, packet, updates
 
     fake = tmp_path / "fake"
     (fake / "sys-net").mkdir(parents=True)
@@ -80,6 +80,12 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[st
         raise AssertionError(f"test made a real update check request to {url!r}")
 
     monkeypatch.setattr(updates, "https_fetch", no_real_fetch)
+
+    def no_real_socket() -> Any:
+        raise AssertionError("test opened a real socket in discovery; inject a fake")
+
+    monkeypatch.setattr(discovery, "make_socket", no_real_socket)
+    monkeypatch.setattr(discovery, "_state", discovery._ScanState())
     yield {"fake": fake, "sent": sent}
     netinfo.shutdown_resolver()
 

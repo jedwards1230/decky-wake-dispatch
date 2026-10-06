@@ -9,6 +9,17 @@
 - ``netinfo``: default route, interface state, ARP neighbours, status checks.
 - ``dispatch``: the ``Dispatcher`` (gating, bursts, records, error mapping).
 - ``automation``: boot gate and resume watcher.
+- ``updates``: the once-a-day check for a newer release on GitHub.
 """
 
-MODULES = ("log", "mac", "packet", "storage", "devices", "netinfo", "dispatch", "automation")
+MODULES = (
+    "log",
+    "mac",
+    "packet",
+    "storage",
+    "devices",
+    "netinfo",
+    "dispatch",
+    "automation",
+    "updates",
+)

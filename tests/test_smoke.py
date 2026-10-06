@@ -13,6 +13,8 @@ CONTRACT_CALLABLES = [
     "neighbours",
     "export_config",
     "import_config",
+    "update_info",
+    "set_update_check",
 ]
 LIFECYCLE = ["_main", "_unload", "_uninstall"]
 

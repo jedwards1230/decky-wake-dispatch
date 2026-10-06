@@ -290,6 +290,7 @@ async def test_wake_bad_args_return_error_shape(decky_env, sandbox, args, messag
     result = await plugin.wake(*args)
     assert result["ok"] is False and result["error"].startswith(message)
     assert result["outcome"] == "failed" and result["results"] == {}
+    assert result["trigger"] == "manual"
     assert sandbox["sent"] == [] and decky_env.emitted == []
     assert (await plugin.get_state())["last"] is None  # not recorded
 
@@ -316,3 +317,24 @@ async def test_dropped_device_backed_up_once_when_rewrite_keeps_failing(
         assert [d["id"] for d in await main.Plugin().list_devices()] == ["pc-1"]
     settings_dir = Path(decky_env.DECKY_PLUGIN_SETTINGS_DIR)
     assert len(list(settings_dir.glob("devices.json.bak-*"))) == 1
+
+
+async def test_stored_device_with_bad_host_is_kept_and_backed_up_once(decky_env) -> None:
+    original = json.dumps({"version": 1, "devices": [device(1, host="my_pc.lan", status_port=22)]})
+    _settings_file(decky_env).write_text(original)
+    for _ in range(2):
+        [kept] = await main.Plugin().list_devices()
+        assert (kept["id"], kept["host"], kept["status_port"]) == ("pc-1", None, 22)
+    [backup] = list(Path(decky_env.DECKY_PLUGIN_SETTINGS_DIR).glob("devices.json.bak-*"))
+    assert backup.read_text() == original
+    assert json.loads(_settings_file(decky_env).read_text())["devices"] == [kept]
+
+
+async def test_main_after_unload_reopens_the_resolver(decky_env, sandbox) -> None:
+    plugin = main.Plugin()
+    await plugin._main()
+    await plugin._unload()
+    assert await netinfo.reverse_lookup("192.0.2.8", 1.0, lambda ip: ("pc", [], [ip])) is None
+    await plugin._main()
+    assert await netinfo.reverse_lookup("192.0.2.8", 1.0, lambda ip: ("pc", [], [ip])) == "pc"
+    await plugin._unload()

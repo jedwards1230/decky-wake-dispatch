@@ -33,13 +33,16 @@ path the same way Decky does.
 - `test_storage.py`: atomic writes, migration of old settings shapes, corrupt-file
   quarantine (including JSON nested too deeply and over-long numbers), files from a
   newer schema.
-- `test_devices.py`: device validation (id alphabet, name cleaning of bidi and
-  zero-width characters and NFC, host syntax), id generation, the 64-device and
+- `test_devices.py`: device validation (id alphabet, name cleaning of bidi,
+  zero-width, surrogate and private-use characters and NFC, host syntax), repairing
+  stored devices whose id or status host fails the rules, id generation, the 64-device and
   256 KiB import limits, export, import merge and replace.
 - `test_netinfo.py`: route and ARP parsing, interface state, the daemon-thread name
-  lookups (timeouts, the in-flight bound, late answers, shutdown, a subprocess whose
-  lookup hangs still exits at once), and the status mapping (refused -> awake, no route
-  or slow lookup -> unknown, timeout -> asleep, connecting to the numeric address).
+  lookups (timeouts, queueing beyond the thread limit, stuck threads, a thread that
+  can't start, late answers and answers after the loop closed, cache limits, shutdown,
+  a subprocess whose lookup hangs still exits at once), and the status mapping
+  (refused -> awake, no route or slow lookup -> unknown, timeout -> asleep,
+  `EHOSTUNREACH` depending on the default route, connecting to the numeric address).
 - `test_dispatch.py`: device selection, the home-gateway gate, bursts, outcomes and
   reasons, per-device error isolation.
 - `test_automation.py`: the boot gate and the resume watcher, driven by injected clocks

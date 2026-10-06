@@ -324,7 +324,7 @@ def test_good_ids_and_generated_ids_match_pattern() -> None:
 
 def test_stored_device_with_bad_id_gets_a_new_one() -> None:
     kept, dropped = devices.sanitise_stored([device(1, id="has, comma")])
-    assert dropped == 0
+    assert dropped == 1  # repaired: counts so the caller backs the file up
     assert devices.ID_PATTERN.fullmatch(kept[0]["id"]) and kept[0]["id"] != "has, comma"
 
 
@@ -395,3 +395,29 @@ def test_bad_hosts(host) -> None:
     with pytest.raises(DeviceError) as err:
         devices.validate_devices([device(1, host=host)])
     assert err.value.field == "host"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"host": "my_pc.lan", "status_port": 22}, {"host": None, "status_port": 22}),
+        ({"host": "fe80::1%wlan0", "status_port": 22}, {"host": None, "status_port": 22}),
+        ({"host": "caf\u00e9.local", "status_port": 22}, {"host": None, "status_port": 22}),
+        ({"host": "192.0.2.5", "status_port": 0}, {"host": "192.0.2.5", "status_port": None}),
+        (
+            {"id": "bad id", "host": "bad host", "status_port": "22"},
+            {"host": None, "status_port": None},
+        ),
+    ],
+)
+def test_stored_device_with_bad_status_fields_is_kept_without_them(overrides, expected) -> None:
+    kept, repaired = devices.sanitise_stored([device(1, **overrides), device(2)])
+    assert repaired == 1
+    assert [d["mac"] for d in kept] == ["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"]
+    assert {k: kept[0][k] for k in expected} == expected
+
+
+def test_stored_device_with_other_bad_field_is_still_dropped() -> None:
+    kept, dropped = devices.sanitise_stored([device(1, host="bad host", mac="x"), device(2)])
+    assert dropped == 1
+    assert [d["id"] for d in kept] == ["pc-2"]

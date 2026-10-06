@@ -31,9 +31,13 @@ IMPORT_MAX_BYTES = 256 * 1024
 # The panel joins ids with "," for some calls, so ids stay to a safe alphabet.
 ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,128}")
 _HOST_LABEL = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)")
-# Unicode categories removed from names: controls (Cc) and format characters
-# (Cf: bidi overrides, zero-width joiners and spaces, soft hyphen, ...).
-_STRIPPED_CATEGORIES = frozenset({"Cc", "Cf"})
+# Unicode categories removed from names: controls (Cc), format characters
+# (Cf: bidi overrides, zero-width joiners and spaces, soft hyphen, ...), lone
+# surrogates (Cs) and private-use characters (Co).
+_STRIPPED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co"})
+# A stored device with a bad value in one of these fields is kept with the field
+# reset (a new id, no status check) instead of being dropped.
+_REPAIRABLE = {"id": "", "host": None, "status_port": None}
 _WHITESPACE = re.compile(r"\s+")
 IMPORT_MODES = ("replace", "merge")
 FIELDS = (
@@ -71,7 +75,7 @@ class ConfigError(ValueError):
 
 
 def _clean_text(value: Any) -> str:
-    """NFC-normalise, drop Cc/Cf characters, collapse whitespace runs, trim."""
+    """NFC-normalise, drop Cc/Cf/Cs/Co characters, collapse whitespace runs, trim."""
     if not isinstance(value, str):
         return ""
     text = unicodedata.normalize("NFC", value)
@@ -92,7 +96,11 @@ def sanitise_name(value: str, max_len: int = NAME_MAX) -> str:
 
 
 def valid_host(value: str) -> bool:
-    """True for an IP literal (no IPv6 scope) or an RFC 1123 hostname."""
+    """True for an IP literal (no IPv6 scope) or an RFC 1123 hostname.
+
+    A name whose last label is all digits (``1.2.3``, ``192.168.001.1``) is not a
+    hostname (RFC 3696 section 2); only real IP literals pass as addresses.
+    """
     if "%" not in value:
         try:
             ipaddress.ip_address(value)
@@ -102,7 +110,10 @@ def valid_host(value: str) -> bool:
     name = value[:-1] if value.endswith(".") else value
     if not name or len(name) > HOST_MAX:
         return False
-    return all(_HOST_LABEL.fullmatch(label) for label in name.split("."))
+    labels = name.split(".")
+    if labels[-1].isdigit():
+        return False
+    return all(_HOST_LABEL.fullmatch(label) for label in labels)
 
 
 def _fail(index: int, field: str, message: str) -> DeviceError:
@@ -295,12 +306,31 @@ def validate_devices(raw: Any) -> list[dict[str, Any]]:
     return _assign_ids(devices)
 
 
+def _validate_stored(item: Any, index: int) -> tuple[dict[str, Any], bool]:
+    """``validate_device``, resetting repairable fields that fail; ``(device, repaired)``."""
+    repaired = False
+    for _attempt in range(len(_REPAIRABLE) + 1):
+        try:
+            return validate_device(item, index), repaired
+        except DeviceError as exc:
+            if exc.field not in _REPAIRABLE or item.get(exc.field) == _REPAIRABLE[exc.field]:
+                raise
+            get_logger().warning("Stored device: %s; resetting %s", exc.message, exc.field)
+            item = {**item, exc.field: _REPAIRABLE[exc.field]}
+            repaired = True
+    return validate_device(item, index), repaired
+
+
 def sanitise_stored(raw: list[Any]) -> tuple[list[dict[str, Any]], int]:
-    """Validate devices read from disk; return ``(devices, number dropped)``.
+    """Validate devices read from disk; return ``(devices, number dropped or repaired)``.
 
     Invalid entries are dropped (and logged) so one bad entry doesn't hide the
-    rest; missing, duplicate or malformed ids get new ones. Only the first
-    ``MAX_DEVICES`` valid devices are kept; the rest count as dropped. Duplicate
+    rest; missing or duplicate ids get new ones. A device whose id, status host
+    or status port fails validation (rules tightened by a newer build) is kept
+    with that field reset - a new id, or no status check - and counts in the
+    returned number like a dropped one, so the caller backs the file up first.
+    Only the first ``MAX_DEVICES`` valid devices are kept; the rest count as
+    dropped. Duplicate
     MACs are tolerated here (the next save asks the user to fix them). The
     caller persists the result when it differs from ``raw`` so generated ids
     stay stable.
@@ -316,16 +346,13 @@ def sanitise_stored(raw: list[Any]) -> tuple[list[dict[str, Any]], int]:
             )
             break
         try:
-            try:
-                device = validate_device(item, index)
-            except DeviceError as exc:
-                if exc.field != "id":
-                    raise
-                device = validate_device({**item, "id": ""}, index)
+            device, repaired = _validate_stored(item, index)
         except DeviceError as exc:
             get_logger().warning("Ignoring stored device: %s", exc.message)
             dropped += 1
             continue
+        if repaired:
+            dropped += 1
         if device["id"] in seen:
             device["id"] = ""
         seen.add(device["id"])

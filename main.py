@@ -179,8 +179,7 @@ class Plugin:
             error = f"Unknown trigger {trigger!r}; expected one of {', '.join(dispatch.TRIGGERS)}."
         if error is not None:
             decky.logger.error("wake called with bad arguments: %s", error)
-            label = trigger if isinstance(trigger, str) else "manual"
-            return {**dispatcher.record(label, "failed", error), "ok": False, "error": error}
+            return {**dispatcher.record("manual", "failed", error), "ok": False, "error": error}
         return await dispatcher.dispatch(trigger, wanted)
 
     async def status(self, ids: list[str] | None = None, *_args: Any) -> dict[str, str]:
@@ -222,6 +221,7 @@ class Plugin:
                 os.makedirs(directory, exist_ok=True)
             except OSError as exc:
                 decky.logger.error("Could not create %s: %s", directory, exc)
+        netinfo.open_resolver()  # in case an earlier _unload in this process closed it
         _automation_for(self).start()
 
     async def _unload(self) -> None:

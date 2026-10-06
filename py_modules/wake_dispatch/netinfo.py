@@ -52,20 +52,25 @@ STATUS_LOOKUP_TIMEOUT = 1.0  # resolving a status host name, per device
 REVERSE_DNS_TIMEOUT = 0.5
 NETWORK_POLL_INTERVAL = 1.0
 
-# At most this many lookup threads at once; a lookup that finds no free slot
-# fails fast (-> None) instead of queueing behind stuck ones.
+# At most this many lookups run at once. Callers beyond that queue (on the event
+# loop) until a slot frees or their own timeout passes. Threads that outlive
+# their caller's timeout keep a thread slot until the OS resolver gives up; once
+# all of those are held by stuck threads, new lookups fail fast (-> None).
 LOOKUP_THREADS = 8
+CACHE_MAX = 256  # entries per name cache; expired ones are pruned first
+CLOSE_TIMEOUT = 0.25  # seconds to wait for a status connection to close
 HOSTNAME_TTL = 300.0  # seconds to remember a resolved name
 MISS_TTL = 60.0  # seconds to remember that an address has no name
 ADDRESS_TTL = 30.0  # seconds to remember a status host's address
 ADDRESS_MISS_TTL = 10.0  # seconds to remember that a status host doesn't resolve
 
 # Connect errors that mean "this device has no route there", not "the PC is off".
-NO_ROUTE_ERRNOS = frozenset(
-    {errno.ENETUNREACH, errno.ENETDOWN, errno.EADDRNOTAVAIL, errno.EHOSTUNREACH}
-)
+# EHOSTUNREACH is also what a sleeping PC on the same subnet gives once ARP gets
+# no answer, so it only counts as "no route" when there is no default route.
+NO_ROUTE_ERRNOS = frozenset({errno.ENETUNREACH, errno.ENETDOWN, errno.EADDRNOTAVAIL})
 
 _lookup_slots = threading.BoundedSemaphore(LOOKUP_THREADS)
+_lookup_queue: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 _resolver_closed = False
 _hostname_cache: dict[str, tuple[str | None, float]] = {}
 _address_cache: dict[str, tuple[str | None, float]] = {}
@@ -197,25 +202,46 @@ def parse_arp(text: str) -> list[dict[str, str]]:
 _OK, _FAILED, _TIMED_OUT = "ok", "failed", "timed out"
 
 
+def _queue_for(loop: asyncio.AbstractEventLoop) -> asyncio.Semaphore:
+    """The loop's lookup queue (an asyncio semaphore is bound to one loop)."""
+    global _lookup_queue
+    if _lookup_queue is None or _lookup_queue[0] is not loop:
+        _lookup_queue = (loop, asyncio.Semaphore(LOOKUP_THREADS))
+    return _lookup_queue[1]
+
+
 async def _lookup_in_thread(
     func: Callable[[str], Any], arg: str, timeout: float
 ) -> tuple[str, Any]:
     """Run blocking ``func(arg)`` on a daemon thread; return ``(outcome, value)``.
 
     ``outcome`` is ``_OK`` (value = the result), ``_FAILED`` (value = the
-    exception) or ``_TIMED_OUT`` (also used when the resolver is shut down or
-    every lookup slot is taken). The result comes back through
+    exception) or ``_TIMED_OUT`` (also used when the resolver is shut down, or
+    every thread slot is held by a stuck lookup). Waiting for a free slot counts
+    against ``timeout``. The result comes back through
     ``loop.call_soon_threadsafe``; a thread that finishes after the caller gave
     up, or after the loop closed, just drops it. A stuck thread never blocks the
-    loop or interpreter exit (it's a daemon), it only holds its slot.
+    loop or interpreter exit (it's a daemon), it only holds its thread slot.
     """
+    if _resolver_closed:
+        return _TIMED_OUT, None
+    loop = asyncio.get_running_loop()
+    try:
+        async with asyncio.timeout(timeout), _queue_for(loop):
+            return await _start_and_wait(loop, func, arg)
+    except TimeoutError:
+        return _TIMED_OUT, None
+
+
+async def _start_and_wait(
+    loop: asyncio.AbstractEventLoop, func: Callable[[str], Any], arg: str
+) -> tuple[str, Any]:
     if _resolver_closed:
         return _TIMED_OUT, None
     slots = _lookup_slots
     if not slots.acquire(blocking=False):
-        get_logger().warning("Too many name lookups in flight; skipping %s", arg)
+        get_logger().warning("Name lookups are stuck; skipping %s", arg)
         return _TIMED_OUT, None
-    loop = asyncio.get_running_loop()
     future: asyncio.Future[tuple[str, Any]] = loop.create_future()
 
     def deliver(outcome: tuple[str, Any]) -> None:
@@ -239,11 +265,30 @@ async def _lookup_in_thread(
     except RuntimeError:  # can't start a thread (interpreter shutting down, limits)
         slots.release()
         return _TIMED_OUT, None
-    try:
-        async with asyncio.timeout(timeout):
-            return await future
-    except TimeoutError:
-        return _TIMED_OUT, None
+    return await future
+
+
+def _remember(
+    cache: dict[str, tuple[str | None, float]],
+    key: str,
+    value: str | None,
+    expiry: float,
+    now: float,
+) -> None:
+    """Store ``key``, keeping ``cache`` to ``CACHE_MAX`` entries (expired first, then oldest)."""
+    cache.pop(key, None)
+    if len(cache) >= CACHE_MAX:
+        for stale in [k for k, (_v, until) in cache.items() if until <= now]:
+            del cache[stale]
+        while len(cache) >= CACHE_MAX:
+            del cache[next(iter(cache))]
+    cache[key] = (value, expiry)
+
+
+def open_resolver() -> None:
+    """Allow lookups again after ``shutdown_resolver`` (``Plugin._main`` calls it)."""
+    global _resolver_closed
+    _resolver_closed = False
 
 
 def shutdown_resolver() -> None:
@@ -303,7 +348,10 @@ async def resolve_host(
     address = _ip_literal(value) if outcome == _OK and isinstance(value, str) else None
     if address is not None and ipaddress.ip_address(address).version != 4:
         address = None
-    _address_cache[host] = (address, _now() + (ADDRESS_TTL if address else ADDRESS_MISS_TTL))
+    now = _now()
+    _remember(
+        _address_cache, host, address, now + (ADDRESS_TTL if address else ADDRESS_MISS_TTL), now
+    )
     return address
 
 
@@ -334,7 +382,8 @@ async def reverse_lookup(
         raw = result[0] if isinstance(result, tuple) and result else result
         name = sanitise_name(raw, max_len=HOST_MAX) if isinstance(raw, str) else None
     name = name or None
-    _hostname_cache[ip] = (name, clock() + (HOSTNAME_TTL if name else MISS_TTL))
+    now = clock()
+    _remember(_hostname_cache, ip, name, now + (HOSTNAME_TTL if name else MISS_TTL), now)
     return name
 
 
@@ -364,13 +413,16 @@ async def check_status(
     timeout: float | None = None,
     opener: Opener | None = None,
     resolver: Callable[[str], str] | None = None,
+    route_probe: Callable[[], dict[str, str] | None] | None = None,
 ) -> str:
     """Resolve ``host`` (see ``resolve_host``), then TCP-connect to the numeric address.
 
     - connected, or refused (the PC's TCP stack answered) -> "awake"
     - connect timed out -> "asleep"
     - no host or port, a name that doesn't resolve in time, or no route to it
-      (ENETUNREACH, ENETDOWN, EADDRNOTAVAIL, EHOSTUNREACH) -> "unknown"
+      (ENETUNREACH, ENETDOWN, EADDRNOTAVAIL) -> "unknown"
+    - EHOSTUNREACH -> "unknown" without a default route (``route_probe``,
+      default ``default_route``), else "asleep" (ARP got no answer on the LAN)
     - any other connect error -> "asleep"
     """
     if not host or not port:
@@ -389,12 +441,16 @@ async def check_status(
     except socket.gaierror:
         return "unknown"
     except OSError as exc:
-        return "unknown" if exc.errno in NO_ROUTE_ERRNOS else "asleep"
+        if exc.errno in NO_ROUTE_ERRNOS:
+            return "unknown"
+        if exc.errno == errno.EHOSTUNREACH and (route_probe or default_route)() is None:
+            return "unknown"
+        return "asleep"
     except (ValueError, UnicodeError):
         return "unknown"
     writer.close()
     with contextlib.suppress(OSError):
-        async with asyncio.timeout(1.0):
+        async with asyncio.timeout(CLOSE_TIMEOUT):
             await writer.wait_closed()
     return "awake"
 
@@ -405,6 +461,7 @@ async def status_map(
     timeout: float | None = None,
     opener: Opener | None = None,
     resolver: Callable[[str], str] | None = None,
+    route_probe: Callable[[], dict[str, str] | None] | None = None,
 ) -> dict[str, str]:
     """Check every selected device concurrently; unknown ids are ignored."""
     wanted = None if ids is None else set(ids)
@@ -417,6 +474,7 @@ async def status_map(
                 timeout=timeout,
                 opener=opener,
                 resolver=resolver,
+                route_probe=route_probe,
             )
             for d in selected
         ),

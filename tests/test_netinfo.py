@@ -13,6 +13,7 @@ from helpers import HOME_ROUTE, ROUTE_HEADER, route_line, write_network
 
 from wake_dispatch import netinfo
 
+HOME = {"iface": "wlan0", "gateway": "192.168.1.1"}
 PY_MODULES = Path(__file__).resolve().parent.parent / "py_modules"
 
 
@@ -483,3 +484,165 @@ def test_hung_lookup_does_not_block_interpreter_exit(tmp_path) -> None:
     )
     assert result.returncode == 0, result.stderr.decode()
     assert time.monotonic() - started < 5
+
+
+def _arp_lines(count: int) -> str:
+    header = "IP address       HW type     Flags       HW address            Mask     Device\n"
+    return header + "".join(
+        f"192.0.2.{i + 1}  0x1  0x2  aa:bb:cc:dd:ee:{i + 1:02x}  *  wlan0\n" for i in range(count)
+    )
+
+
+async def test_neighbours_queue_beyond_the_thread_limit(sandbox) -> None:
+    (sandbox["fake"] / "arp").write_text(_arp_lines(12))
+    running = 0
+    peak = 0
+    lock = threading.Lock()
+
+    def resolver(ip: str):
+        nonlocal running, peak
+        with lock:
+            running += 1
+            peak = max(peak, running)
+        time.sleep(0.02)
+        with lock:
+            running -= 1
+        return (f"pc-{ip.rsplit('.', 1)[1]}.example", [], [ip])
+
+    result = await netinfo.neighbours(resolver=resolver, timeout=2.0)
+    assert [n["hostname"] for n in result] == [f"pc-{i}.example" for i in range(1, 13)]
+    assert peak <= netinfo.LOOKUP_THREADS
+
+
+async def test_queued_lookups_still_bounded_by_their_timeout(sandbox) -> None:
+    (sandbox["fake"] / "arp").write_text(_arp_lines(12))
+    release = threading.Event()
+
+    def slow(_ip: str):
+        release.wait(5)
+        return ("late.example", [], [])
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    try:
+        result = await netinfo.neighbours(resolver=slow, timeout=0.1)
+    finally:
+        release.set()
+    assert [n["hostname"] for n in result] == [None] * 12
+    assert loop.time() - started < 1.0
+
+
+async def test_status_waits_for_a_slot_while_the_picker_resolves() -> None:
+    release = threading.Event()
+
+    def busy(_ip: str):
+        release.wait(5)
+        return ("pc.example", [], [])
+
+    async def opener(_h, _p):
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "refused")
+
+    lookups = [
+        asyncio.create_task(netinfo.reverse_lookup(f"192.0.2.{i}", 1.0, busy))
+        for i in range(netinfo.LOOKUP_THREADS)
+    ]
+    await asyncio.sleep(0.01)
+    status = asyncio.create_task(
+        netinfo.check_status("pc.example", 22, opener=opener, resolver=lambda _h: "192.0.2.50")
+    )
+    await asyncio.sleep(0.05)
+    assert not status.done()  # queued, not failed
+    release.set()
+    assert await status == "awake"
+    await asyncio.gather(*lookups)
+
+
+@pytest.mark.parametrize(("route", "expected"), [(None, "unknown"), (HOME, "asleep")])
+async def test_host_unreachable_depends_on_a_default_route(route, expected) -> None:
+    exc = OSError(errno.EHOSTUNREACH, "No route to host")
+    result = await netinfo.check_status(
+        "192.0.2.1", 22, opener=_raiser(exc), route_probe=lambda: route
+    )
+    assert result == expected
+    devices = [{"id": "pc", "host": "192.0.2.1", "status_port": 22}]
+    assert await netinfo.status_map(
+        devices, None, opener=_raiser(exc), route_probe=lambda: route
+    ) == {"pc": expected}
+
+
+async def test_host_unreachable_uses_the_real_route_probe(sandbox) -> None:
+    exc = OSError(errno.EHOSTUNREACH, "No route to host")
+    assert await netinfo.check_status("192.0.2.1", 22, opener=_raiser(exc)) == "unknown"
+    write_network(sandbox["fake"], HOME_ROUTE, {"wlan0": "up"})
+    assert await netinfo.check_status("192.0.2.1", 22, opener=_raiser(exc)) == "asleep"
+
+
+async def test_slow_close_is_bounded() -> None:
+    class SlowClose(FakeWriter):
+        async def wait_closed(self) -> None:
+            await asyncio.sleep(10)
+
+    async def opener(_h, _p):
+        return object(), SlowClose()
+
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    assert await netinfo.check_status("192.0.2.1", 22, opener=opener) == "awake"
+    assert loop.time() - started < netinfo.CLOSE_TIMEOUT + 0.2
+
+
+async def test_thread_start_failure_restores_the_slot(monkeypatch) -> None:
+    def refuse(self):
+        raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading.Thread, "start", refuse)
+    for _ in range(netinfo.LOOKUP_THREADS + 2):
+        assert await netinfo.reverse_lookup("192.0.2.1", 1.0, lambda ip: ("pc", [], [ip])) is None
+    assert netinfo._lookup_slots._value == netinfo.LOOKUP_THREADS
+    assert "192.0.2.1" not in netinfo._hostname_cache
+
+
+def test_answer_after_the_loop_closed_is_dropped(monkeypatch) -> None:
+    release = threading.Event()
+    finished = threading.Event()
+    errors: list[BaseException] = []
+    monkeypatch.setattr(threading, "excepthook", lambda args: errors.append(args.exc_value))
+
+    def gated(ip: str):
+        try:
+            release.wait(5)
+            return ("pc.example", [], [ip])
+        finally:
+            finished.set()
+
+    loop = asyncio.new_event_loop()
+    try:
+        assert loop.run_until_complete(netinfo.reverse_lookup("192.0.2.1", 0.05, gated)) is None
+    finally:
+        loop.close()
+    release.set()
+    assert finished.wait(2)
+    for _ in range(100):  # the worker releases its slot right after trying to deliver
+        if netinfo._lookup_slots._value == netinfo.LOOKUP_THREADS:
+            break
+        time.sleep(0.01)
+    assert errors == []
+    assert netinfo._lookup_slots._value == netinfo.LOOKUP_THREADS
+
+
+async def test_name_caches_are_bounded(monkeypatch) -> None:
+    monkeypatch.setattr(netinfo, "CACHE_MAX", 4)
+    now = [0.0]
+    for i in range(6):
+        await netinfo.reverse_lookup(
+            f"192.0.2.{i}", 1.0, lambda ip: ("pc", [], [ip]), clock=lambda: now[0]
+        )
+    assert list(netinfo._hostname_cache) == [f"192.0.2.{i}" for i in range(2, 6)]  # oldest out
+    now[0] = netinfo.HOSTNAME_TTL + 1  # everything cached so far has expired
+    await netinfo.reverse_lookup(
+        "192.0.2.99", 1.0, lambda ip: ("pc", [], [ip]), clock=lambda: now[0]
+    )
+    assert list(netinfo._hostname_cache) == ["192.0.2.99"]  # expired entries pruned first
+    for i in range(6):
+        await netinfo.resolve_host(f"pc{i}.example", 1.0, lambda _h: "192.0.2.1")
+    assert len(netinfo._address_cache) == 4

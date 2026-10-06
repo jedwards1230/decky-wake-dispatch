@@ -75,7 +75,8 @@ Argument tolerance:
   the ones listed.
 - `wake` with `ids` that isn't null or a list of strings, or a `trigger` that isn't a
   `Trigger`, sends nothing, records and emits nothing, and returns a `DispatchRecord`
-  with `outcome: "failed"`, empty `results`, the message in `reason`, plus
+  with `trigger: "manual"`, `outcome: "failed"`, empty `results`, the message in
+  `reason`, plus
   `ok: false` and `error` (the same message). Valid calls return a plain
   `DispatchRecord` without `ok`.
 - `status` with `ids` that isn't null or a list of strings returns `{}` and logs the
@@ -104,33 +105,41 @@ automatic), including skipped and no-network outcomes for automation.
   another is still running is dropped. Log resume -> route-up time.
 - Status check: the host is resolved first (an IP literal needs no lookup; a name is
   looked up with a 1 s timeout on its own daemon thread and the answer cached for 30 s,
-  a miss for 10 s), then a TCP connect to the numeric address with a 1 s timeout, so a
-  device takes at most about 2 s. Connected, or refused (`ECONNREFUSED`: the PC's TCP
-  stack answered) -> `awake`; connect timed out (or any other connect error) ->
-  `asleep`; no host or port, a lookup that failed or took longer than its timeout, or
-  no route to the address (`ENETUNREACH`, `ENETDOWN`, `EADDRNOTAVAIL`, `EHOSTUNREACH`)
-  -> `unknown`.
+  a miss for 10 s), then a TCP connect to the numeric address with a 1 s timeout, and
+  at most 0.25 s to close the connection, so a device takes at most about 2.25 s.
+  Connected, or refused (`ECONNREFUSED`: the PC's TCP stack answered) -> `awake`;
+  connect timed out (or any other connect error) -> `asleep`; `EHOSTUNREACH` ->
+  `asleep` while there is a default route (on the LAN it means ARP got no answer from
+  the sleeping PC), `unknown` without one; no host or port, a lookup that failed or took
+  longer than its timeout, or no route to the network (`ENETUNREACH`, `ENETDOWN`,
+  `EADDRNOTAVAIL`) -> `unknown`.
 - Name lookups (status hosts and the `neighbours` reverse lookups) each run on a daemon
-  thread, at most 8 at once; a lookup with no free slot returns no answer immediately.
+  thread, at most 8 at once; further lookups wait their turn within their own timeout.
+  A lookup that is still running when its caller's timeout passes keeps its slot until
+  the OS resolver returns; when every slot is held that way, new lookups return no
+  answer immediately. Each name cache holds at most 256 entries.
   No thread pool executor is used anywhere, so a stuck lookup never delays unload or
   process exit. Reverse-lookup names are cleaned like device names (see Validation),
   up to 253 characters.
 - Unload: `_unload` cancels the background tasks and closes the resolver without
   awaiting anything, then logs "Wake Dispatch backend unloading".
 - Validation: ids match `^[A-Za-z0-9._-]{1,128}$` (generated ids always do). Names are
-  NFC-normalised, Unicode control (Cc) and format (Cf: bidi overrides, zero-width)
-  characters are removed, whitespace runs become one space and the ends are trimmed;
+  NFC-normalised, Unicode control (Cc), format (Cf: bidi overrides, zero-width),
+  surrogate (Cs) and private-use (Co) characters are removed, whitespace runs become one space and the ends are trimmed;
   the result must be 1-64 characters. `host` is an IP literal (no IPv6 scope id) or an
   RFC 1123 hostname: dot-separated labels of 1-63 letters, digits and hyphens, not
-  starting or ending with a hyphen, at most 253 characters, optional trailing dot;
+  starting or ending with a hyphen, at most 253 characters, optional trailing dot, and a
+  last label that isn't all digits (so `1.2.3` is neither an address nor a name);
   anything else is a `host` field error.
 - Limits: at most 64 devices. `save_devices` with more returns `ok: false`; an import
   over the limit (either mode, after merging) returns `ok: false` with a plain message.
   Import text is at most 256 KiB (UTF-8). JSON nested too deeply or holding a number
   too long to convert is "can't be read" (import) or treated as a corrupt file (on disk).
   A stored file over the limit keeps its first 64 valid devices; the rest count as
-  dropped (so the file is backed up first, see Files). A stored device whose id breaks
-  the id rule gets a new id rather than being dropped.
+  dropped (so the file is backed up first, see Files). A stored device whose id, status
+  host or status port breaks these rules (for example a host written by an older build)
+  is kept with that field reset - a new id, `host: null` or `status_port: null` - and
+  the file is backed up first just as for a dropped device.
 - Per-device error isolation: one device raising OSError/ValueError does not stop
   the others.
 - Files: settings `DECKY_PLUGIN_SETTINGS_DIR/devices.json` `{ "version": 1, "devices": [...] }`;

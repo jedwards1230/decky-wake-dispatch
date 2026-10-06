@@ -51,6 +51,21 @@ type Status = "awake" | "asleep" | "unknown"; // see §4 Status check
 interface Neighbour { ip: string; mac: string; iface: string; hostname: string | null }
 interface Network { iface: string; gateway: string } // current default route
 type Saved = { ok: true; devices: Device[] } | { ok: false; error: string; field?: string; index?: number };
+
+type UpdateStatus = "disabled" | "unchecked" | "current" | "available" | "unavailable";
+interface UpdateRelease { version: string; url: string; sha256: string; size: number } // sha256 = 64 lowercase hex, no prefix
+interface UpdateInfo {
+  enabled: boolean;              // the update-check setting
+  installed: string | null;      // "0.1.0"; null if the packaged package.json is unreadable
+  status: UpdateStatus;
+  latest: string | null;         // newest release version seen by the last successful check
+  release: UpdateRelease | null; // only when status == "available"
+  checked_at: number | null;     // unix seconds of the last successful check
+  error: string | null;          // plain language, only when status == "unavailable"
+  throttled: boolean;            // force was ignored because the last check was < 60 s ago
+  manual_url: string;            // releases/latest/download/wake-dispatch.zip, for manual installs
+}
+type UpdateCheckSaved = { ok: true; enabled: boolean } | { ok: false; error: string };
 ```
 
 ## §2 Callables
@@ -67,6 +82,8 @@ type Saved = { ok: true; devices: Device[] } | { ok: false; error: string; field
 | `neighbours` | — | `Neighbour[]` (from `/proc/net/arp`, complete entries only, flags 0x2; hostname via reverse lookup with short timeout, may be null) |
 | `export_config` | — | `string` (pretty JSON of the settings file, `{version, devices}`) |
 | `import_config` | `text: string`, `mode: "replace" \| "merge"` | `Saved` (merge = upsert by id, then by MAC) |
+| `update_info` | `force: boolean` (only `true` forces; extra args ignored) | `UpdateInfo` (never raises; never installs) |
+| `set_update_check` | `enabled: boolean` | `UpdateCheckSaved` (a non-bool is `ok: false`) |
 
 Argument tolerance:
 
@@ -150,6 +167,42 @@ automatic), including skipped and no-network outcomes for automation.
   validation is dropped only after the file is copied to `devices.json.bak-<ts>`
   (once per distinct file content per process, even if the rewrite keeps failing). A
   corrupt file is renamed `*.corrupt-<ts>` and treated as empty, logged.
+- Update check (`wake_dispatch.updates`): one HTTPS GET to
+  `https://api.github.com/repos/jedwards1230/decky-wake-dispatch/releases/latest` with
+  `User-Agent: wake-dispatch/<installed>`, run on a daemon thread (5 s socket timeout,
+  7 s overall). TLS verifies certificate and hostname (TLS 1.2+) against the first
+  existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`, else `certifi`;
+  with none the check is `unavailable` and nothing is sent. HTTPS only; redirects are
+  followed only to `https://api.github.com/`. A body over 512 KiB or a non-200 status
+  fails the check.
+- Strict release parse (any failure -> the check failed, reason logged): a JSON object
+  with `draft` and `prerelease` exactly `false`; `tag_name` `vX.Y.Z` (no leading zeros,
+  at most 4 digits per part); exactly one asset named `wake-dispatch.zip`, `state`
+  `uploaded` if present, integer `size` with 0 < size < 5 MiB, `browser_download_url`
+  exactly `https://github.com/jedwards1230/decky-wake-dispatch/releases/download/vX.Y.Z/wake-dispatch.zip`,
+  and `digest` `sha256:<64 lowercase hex>`. The installed version is the `version` of
+  `DECKY_PLUGIN_DIR/package.json`, read on every call (`X.Y.Z`, else `unavailable` with
+  "Couldn't read the installed version" and no request).
+- Update cadence: one lock, so concurrent calls share a single request. Without
+  `force`: setting off -> no request, status `disabled`; setting on -> a request only
+  if none was ever made, the last success is 24 h old, or the last attempt failed and
+  its backoff (1 h, doubling per consecutive failure, at most 24 h) has passed. With
+  `force` (the "Check now" button, also when the setting is off): a request unless the
+  last attempt was less than 60 s ago, in which case the cached result comes back with
+  `throttled: true`.
+- Update status: `disabled` (setting off and not forced this call); `unchecked` (no
+  attempt yet); `unavailable` (installed version unreadable, or the last attempt failed
+  and there is no success younger than 48 h); otherwise the cached release is compared
+  with the installed version on every call -> `available` (newer) or `current`. A failed
+  attempt with a success younger than 48 h reports that success, `error: null`.
+- Update files: setting `DECKY_PLUGIN_SETTINGS_DIR/options.json`
+  `{ "version": 1, "update_check": bool }` (missing, corrupt or non-bool -> on; other
+  keys preserved on write; not part of `export_config`). Cache
+  `DECKY_PLUGIN_RUNTIME_DIR/update.json`
+  `{ version: 1, attempt_at, success_at | null, failures, latest: UpdateRelease | null, error | null }`;
+  any invalid or inconsistent field, or a timestamp more than 5 min in the future,
+  discards it (treated as never checked). `_uninstall` deletes neither file: Decky runs
+  it on every update, before extracting the new version.
 - Magic packet: 6 x 0xFF + MAC x 16 (102 bytes), + 6-byte SecureOn (108 bytes).
   UDP, SO_BROADCAST, to (`broadcast`, `port`).
 - Stdlib only, Python 3.11. Logging via `decky.logger`.

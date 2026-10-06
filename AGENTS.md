@@ -26,9 +26,22 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
   Never report or display a "sent" as "woken" — only a status check can say the PC is up,
   and `unknown` must never be shown as a failure.
 - **URL installs never auto-update.** Decky doesn't track plugins installed from a URL,
-  so users only get a fix by reinstalling from
+  so users only learn of a fix from the panel's daily update check
+  (`wake_dispatch.updates`, which reads GitHub's `releases/latest`) and get it through
+  Decky's install prompt or by reinstalling from
   `releases/latest/download/wake-dispatch.zip`. The asset name `wake-dispatch.zip` is
   therefore as frozen as the folder name, and every release must be marked latest.
+- **`_uninstall` runs on every update.** Decky uninstalls the old copy, then extracts
+  the new one, so `_uninstall` must never delete settings, state or caches.
+- **The update hand-off passes the release's sha256, and Decky checks it only after
+  uninstalling the old copy.** A wrong hash leaves the plugin removed (its data
+  survives), so the hash must come from the release asset's own `digest`, never be
+  guessed or computed elsewhere.
+- **The version passed to Decky's installer is never `"dev"`.** With `"dev"` Decky
+  re-derives the plugin name from the zip instead of using `PLUGIN_NAME`.
+- **The update check's TLS fails closed.** It uses the system CA files, then
+  `certifi` (bundled with Decky's interpreter), and with neither it reports
+  "unavailable" rather than skipping verification.
 - **Steam client updates break `@decky/ui`, not the backend.** A Steam update can break
   panel components overnight; automation keeps working because it lives in the backend.
   Keep automation logic, timers and retries in Python — never in `src/`, which only runs
@@ -98,7 +111,9 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
    is backed up or quarantined, never overwritten blind.
 7. **No network traffic beyond what the README's Privacy section lists**: the wakes the
    user triggers or enabled, status checks (and their name lookups) to configured
-   hosts, and reverse lookups for the network picker.
+   hosts, reverse lookups for the network picker, and the update check (one HTTPS GET
+   to `api.github.com` at most daily, or on "Check now"; off when the user turns it
+   off).
 
 ## Design discipline
 

@@ -35,9 +35,15 @@ Wake Dispatch then appears in Decky's plugin list.
 
 ### Updating and rolling back
 
-Decky does not tell you about updates for plugins installed from a URL. To update,
-repeat the install steps with the same `latest` URL; it always points at the newest
-release.
+Decky does not tell you about updates for plugins installed from a URL, so Wake
+Dispatch checks for you: once a day, when you open the panel, it asks GitHub for the
+latest release and shows when a new version is available. Press **Update** to open
+Decky's own install confirmation; nothing is installed until you confirm it there.
+**Check now** checks immediately, and **Check for updates** turns the daily check off.
+
+You can also update by hand: repeat the install steps (Decky settings → Developer →
+**Install Plugin from URL**) with the same `latest` URL; it always points at the
+newest release.
 
 To install a specific version instead (for example, to roll back), use that release's
 URL, replacing `vX.Y.Z` with the version you want:
@@ -46,7 +52,7 @@ URL, replacing `vX.Y.Z` with the version you want:
 https://github.com/jedwards1230/decky-wake-dispatch/releases/download/vX.Y.Z/wake-dispatch.zip
 ```
 
-Your devices and settings are kept when you reinstall or change versions.
+Your devices and settings are kept when you update, reinstall or change versions.
 
 ## Using it
 
@@ -192,7 +198,15 @@ Wake Dispatch makes no network connections except:
   you turn on;
 - TCP status checks to the addresses and ports you configure (and, if you enter a
   hostname rather than an IP address, the DNS lookup for it);
-- reverse DNS lookups for the addresses in **Pick from network**, to show device names.
+- reverse DNS lookups for the addresses in **Pick from network**, to show device names;
+- the update check: once a day when you open the panel, and when you press **Check
+  now**, one HTTPS request to `api.github.com` for the latest release of this plugin.
+  Like any web request it shows GitHub your IP address, with a `wake-dispatch/<version>`
+  user agent. Turn it off with **Check for updates** in the panel.
+
+When you press **Update** and confirm, Decky downloads the zip from GitHub and, as it
+does for every install from a URL, sends an install-counter request to its plugin
+store (`plugins.deckbrew.xyz`).
 
 Nothing is sent anywhere else. Your settings stay on your device.
 

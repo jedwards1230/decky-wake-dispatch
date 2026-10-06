@@ -116,7 +116,7 @@ export const EDITOR = {
 
   checkLabel: "Check if it's awake",
   checkNone: "Don't check",
-  checkSunshine: "Steam streaming (Sunshine, 47989)",
+  checkSunshine: "Game streaming (Sunshine, 47989)",
   checkSsh: "SSH (22)",
   checkRdp: "Remote Desktop (3389)",
   checkOther: "Other port (set in Advanced)",

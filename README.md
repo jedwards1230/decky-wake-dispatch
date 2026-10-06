@@ -74,7 +74,7 @@ Under **Check if it's awake**, choose how the plugin should tell whether the PC 
 | Choice | Port checked |
 | --- | --- |
 | Don't check | none; the device shows "No status check" |
-| Steam streaming (Sunshine) | TCP 47989, the port of the Sunshine game-stream host (used with Moonlight); Steam Remote Play itself is not checked |
+| Game streaming (Sunshine) | TCP 47989, the port of the Sunshine game-stream host (used with Moonlight); Steam Remote Play itself is not checked |
 | SSH | TCP 22 |
 | Remote Desktop | TCP 3389 |
 | Other port | any TCP port, set under advanced settings |

@@ -73,9 +73,10 @@ The script resolves the release through the GitHub API and checks it the same wa
 plugin's update check does (tag format, not a draft or prerelease, exactly one
 `wake-dispatch.zip` asset, its download URL, size and sha256 digest). It then connects to
 the device's `SharedJSContext` target, checks whether Wake Dispatch is already installed,
-and asks Decky to install (or update) it with the release's sha256. `--dry-run` stops
+and asks Decky to install it with the release's sha256: as an install, a reinstall (same
+version already installed) or an update (any other installed version). `--dry-run` stops
 before that last step. The script never confirms anything: Decky shows its usual confirm
-dialog on the device, and nothing is installed until someone taps Install or Update there.
+dialog on the device, and nothing is installed until someone taps Install, Reinstall or Update there.
 
 **Security:** remote CEF debugging is unauthenticated. While it is on, anyone on your
 network can control the Steam client on port 8081 — including Decky's backend and its

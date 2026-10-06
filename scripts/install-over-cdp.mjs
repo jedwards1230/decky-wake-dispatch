@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Open Decky Loader's install prompt for a Wake Dispatch release on a device, over
 // Steam's CEF remote debugging port. Development only: it never confirms the prompt,
-// someone at the device has to tap Install (or Update).
+// someone at the device has to tap Install (or Update / Reinstall).
 //
 // Usage:
 //   scripts/install-over-cdp.mjs <host> [vX.Y.Z] [--dry-run] [--port 8081]
@@ -22,8 +22,11 @@ const TIMEOUT_MS = 10_000;
 const TAG_RE = /^v(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})\.(0|[1-9]\d{0,3})$/;
 const DIGEST_RE = /^sha256:([0-9a-f]{64})$/;
 const HOST_RE = /^(?:[A-Za-z0-9.-]+|\[[0-9A-Fa-f:.]+\])$/;
+// Decky's PluginInstallType (these three are unchanged from 3.0.0 to 3.2.10).
 const INSTALL = 0;
-const UPDATE = 2; // Decky's PluginInstallType
+const REINSTALL = 1;
+const UPDATE = 2;
+const TYPE_NAMES = { [INSTALL]: ['INSTALL', 'Install'], [REINSTALL]: ['REINSTALL', 'Reinstall'], [UPDATE]: ['UPDATE', 'Update'] };
 
 function fail(message) {
   console.error(`install-over-cdp: ${message}`);
@@ -159,17 +162,18 @@ const session = await connect(target.webSocketDebuggerUrl).catch((err) => fail(e
 try {
   const state = await session.evaluate(CHECK_JS);
   if (!state?.decky) throw new Error('Decky Loader not found on this device');
-  const installType = state.installed ? UPDATE : INSTALL;
+  // Same version already there -> Decky's Reinstall wording; any other installed version -> Update.
+  const installType = !state.installed ? INSTALL : state.version === release.version ? REINSTALL : UPDATE;
   console.log(`release:      v${release.version}`);
   console.log(`url:          ${release.url}`);
   console.log(`sha256:       ${release.sha256}`);
   console.log(`size:         ${release.size} bytes`);
   console.log(`installed:    ${state.installed ? `yes${state.version ? ` (v${state.version})` : ''}` : 'no'}`);
-  console.log(`install_type: ${installType} (${installType === UPDATE ? 'UPDATE' : 'INSTALL'})`);
+  console.log(`install_type: ${installType} (${TYPE_NAMES[installType][0]})`);
   if (!opts.dryRun) {
     const args = [release.url, PLUGIN_NAME, release.version, release.sha256, installType].map((v) => JSON.stringify(v)).join(', ');
     await session.evaluate(`DeckyBackend.call('utilities/install_plugin', ${args}).then(() => true)`);
-    console.log(`A confirm dialog is waiting on the device — tap ${installType === UPDATE ? 'Update' : 'Install'}.`);
+    console.log(`A confirm dialog is waiting on the device — tap ${TYPE_NAMES[installType][1]}.`);
   }
 } catch (err) {
   console.error(`install-over-cdp: ${err.message}`);

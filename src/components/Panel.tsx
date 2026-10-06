@@ -1,9 +1,9 @@
 import { ButtonItem, PanelSection, PanelSectionRow, showModal } from "@decky/ui";
-import { useState } from "react";
 
 import { useStatus } from "../hooks/useStatus";
-import { loadDevices, useDevices, wakeManual } from "../store";
+import { loadDevices, useDevices, useWaking, wakeManual } from "../store";
 import { S } from "../strings";
+import { AccessibleText } from "./AccessibleText";
 import { DeviceEditor } from "./DeviceEditor";
 import { DeviceRow } from "./DeviceRow";
 import { EmptyState } from "./EmptyState";
@@ -16,18 +16,13 @@ export function Panel() {
   const { devices, failed } = useDevices();
   const list = devices ?? [];
   const statuses = useStatus(list.map((d) => d.id));
-  const [wakingAll, setWakingAll] = useState(false);
+  const wakingAll = useWaking().all;
   const loadedEmpty = devices !== null && devices.length === 0;
   const automationEnabled = list.some((d) => d.auto.length > 0);
 
-  const wakeAll = async () => {
-    if (wakingAll || list.length === 0) return;
-    setWakingAll(true);
-    try {
-      await wakeManual(null);
-    } finally {
-      setWakingAll(false);
-    }
+  // wakeManual ignores a second press while Wake all is in flight.
+  const wakeAll = () => {
+    if (list.length > 0) void wakeManual(null);
   };
 
   return (
@@ -36,11 +31,11 @@ export function Panel() {
         <PanelSectionRow>
           <ButtonItem
             layout="below"
-            disabled={list.length === 0}
+            disabled={list.length === 0 || wakingAll}
             description={loadedEmpty ? S.wakeAllNoDevices : undefined}
-            onClick={() => void wakeAll()}
+            onClick={wakeAll}
           >
-            {wakingAll ? S.waking : S.wakeAll}
+            <AccessibleText visible={wakingAll ? S.waking : S.wakeAll} label={wakingAll ? S.waking : S.wakeAllLabel} />
           </ButtonItem>
         </PanelSectionRow>
 

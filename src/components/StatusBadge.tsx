@@ -13,10 +13,11 @@ const COLOURS: Record<Status | "checking" | "none", string> = {
   none: "#8b929a",
 };
 
-export function StatusBadge({ value }: { value: BadgeValue }) {
+export function StatusBadge({ name, value }: { name: string; value: BadgeValue }) {
   const key = value ?? "checking";
+  const text = S.status[key];
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", whiteSpace: "nowrap" }}>
+    <span role="status" aria-label={S.statusLabel(name, text)} style={{ display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", whiteSpace: "nowrap" }}>
       <span
         aria-hidden="true"
         style={{
@@ -27,7 +28,7 @@ export function StatusBadge({ value }: { value: BadgeValue }) {
           flexShrink: 0,
         }}
       />
-      <span>{S.status[key]}</span>
+      <span aria-hidden="true">{text}</span>
     </span>
   );
 }

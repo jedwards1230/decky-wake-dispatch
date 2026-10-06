@@ -126,14 +126,73 @@ async function offHomeNetwork(targets: Device[]): Promise<boolean> {
   }
 }
 
+// In-flight manual wakes, so a second press (row or Wake all) never sends twice
+// and every button can show "Sending…" while its wake is pending.
+const wakingIds = new Set<string>();
+let wakingAll = false;
+const wakingSubscribers = new Set<() => void>();
+
+function publishWaking(): void {
+  for (const fn of [...wakingSubscribers]) fn();
+}
+
+export interface WakingState {
+  all: boolean;
+  isWaking: (id: string) => boolean;
+}
+
+function wakingState(): WakingState {
+  const ids = new Set(wakingIds);
+  return { all: wakingAll, isWaking: (id) => ids.has(id) };
+}
+
+/** Re-renders when a manual wake starts or settles. */
+export function useWaking(): WakingState {
+  const [state, setState] = useState(wakingState);
+  useEffect(() => {
+    const update = () => setState(wakingState());
+    wakingSubscribers.add(update);
+    update();
+    return () => {
+      wakingSubscribers.delete(update);
+    };
+  }, []);
+  return state;
+}
+
 /**
  * Manual wake: always sends. Toasts once (the event path stands aside while this
  * runs) and schedules the follow-up status check. A status snapshot taken
  * alongside the wake tells the follow-up which devices were already awake.
+ * Devices already being woken are left out; if nothing is left, nothing is sent.
  */
 export async function wakeManual(ids: string[] | null): Promise<DispatchRecord | null> {
+  if (ids === null ? wakingAll : ids.every((id) => wakingIds.has(id))) return null;
   const devices = snapshot.devices ?? [];
-  const targets = ids === null ? devices : devices.filter((d) => ids.includes(d.id));
+  const pendingIds = (ids ?? devices.map((d) => d.id)).filter((id) => !wakingIds.has(id));
+  if (pendingIds.length === 0) return null;
+  // "All" stays null when nothing else is in flight, so devices the panel hasn't
+  // loaded yet are still included.
+  const sendIds = ids === null && wakingIds.size === 0 ? null : pendingIds;
+
+  const isAll = ids === null;
+  if (isAll) wakingAll = true;
+  for (const id of pendingIds) wakingIds.add(id);
+  publishWaking();
+  try {
+    return await sendManualWake(sendIds, devices.filter((d) => pendingIds.includes(d.id)), devices);
+  } finally {
+    if (isAll) wakingAll = false;
+    for (const id of pendingIds) wakingIds.delete(id);
+    publishWaking();
+  }
+}
+
+async function sendManualWake(
+  ids: string[] | null,
+  targets: Device[],
+  devices: Device[],
+): Promise<DispatchRecord | null> {
   const checkIds = checkableDevices(null, targets).map((d) => d.id);
   const before: Promise<Record<string, Status>> =
     checkIds.length > 0 ? status(checkIds).catch(() => ({})) : Promise.resolve({});

@@ -1,14 +1,15 @@
 import { ConfirmModal, DialogButton, Focusable, showModal } from "@decky/ui";
-import { useState } from "react";
 
 import type { Device, Status } from "../api";
 import { automationSummary } from "../format";
-import { deleteDevice, wakeManual } from "../store";
+import { deleteDevice, useWaking, wakeManual } from "../store";
 import { S } from "../strings";
+import { AccessibleText } from "./AccessibleText";
 import { DeviceEditor } from "./DeviceEditor";
 import { StatusBadge } from "./StatusBadge";
 
 const BUTTON_STYLE = {
+  position: "relative",
   minWidth: 0,
   padding: "6px 8px",
   flex: 1,
@@ -31,18 +32,11 @@ function confirmDelete(device: Device) {
 
 /** Name + status text, automation summary, then Wake / Edit / Delete (D-pad left/right between them). */
 export function DeviceRow({ device, status }: { device: Device; status: Status | undefined }) {
-  const [waking, setWaking] = useState(false);
+  const waking = useWaking().isWaking(device.id);
   const hasStatusCheck = Boolean(device.host) && device.status_port !== null;
 
-  const onWake = async () => {
-    if (waking) return;
-    setWaking(true);
-    try {
-      await wakeManual([device.id]);
-    } finally {
-      setWaking(false);
-    }
-  };
+  // wakeManual ignores a second press while this device's wake is in flight.
+  const onWake = () => void wakeManual([device.id]);
 
   return (
     <div style={{ width: "100%" }}>
@@ -50,18 +44,18 @@ export function DeviceRow({ device, status }: { device: Device; status: Status |
         <span title={device.name} style={{ fontWeight: "bold", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {device.name}
         </span>
-        <StatusBadge value={hasStatusCheck ? status : "none"} />
+        <StatusBadge name={device.name} value={hasStatusCheck ? status : "none"} />
       </div>
       <div style={{ fontSize: "12px", opacity: 0.75, margin: "2px 0 6px" }}>{automationSummary(device.auto)}</div>
       <Focusable flow-children="horizontal" style={{ display: "flex", gap: "6px" }}>
-        <DialogButton style={{ ...BUTTON_STYLE, flex: 2 }} onClick={() => void onWake()}>
-          {waking ? S.waking : S.wake}
+        <DialogButton style={{ ...BUTTON_STYLE, flex: 2 }} disabled={waking} onClick={onWake}>
+          <AccessibleText visible={waking ? S.waking : S.wake} label={waking ? `${S.waking} ${device.name}` : S.wakeLabel(device.name)} />
         </DialogButton>
         <DialogButton style={BUTTON_STYLE} onClick={() => showModal(<DeviceEditor device={device} />)}>
-          {S.edit}
+          <AccessibleText visible={S.edit} label={S.editLabel(device.name)} />
         </DialogButton>
         <DialogButton style={BUTTON_STYLE} onClick={() => confirmDelete(device)}>
-          {S.delete}
+          <AccessibleText visible={S.delete} label={S.deleteLabel(device.name)} />
         </DialogButton>
       </Focusable>
     </div>

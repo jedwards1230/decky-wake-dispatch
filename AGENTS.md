@@ -90,8 +90,8 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
   only to an address on the default-route interface's own prefix; check that before
   sending. The mDNS socket binds an ephemeral port, never 5353, which would collide
   with the system's responder and receive every multicast on the network.
-- **`_unload` must never yield before cancelling work.** `discovery.cancel()` and
-  `discovery.cancel_find()` are sync and come first. They only request cancellation:
+- **`_unload` must never yield; `discovery.cancel()` / `cancel_find()` are sync and
+  come first.** They only request cancellation:
   the sockets are closed by each task's own cleanup, which runs only if the event loop
   runs again after `_unload`.
 - **`README.md` ships inside the zip.** `scripts/package.sh` requires it, and the CI zip

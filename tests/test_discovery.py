@@ -1106,6 +1106,41 @@ async def test_find_send_setup_failure() -> None:
     assert await f.find("192.168.1.20") == {"ok": False, "error": discovery.FIND_START_FAILED}
 
 
+async def test_find_send_not_sent_is_reported_without_polling() -> None:
+    f = Finder()
+    f.send = lambda ip, own: False  # type: ignore[method-assign]
+    assert await f.find("192.168.1.20") == {"ok": False, "error": discovery.FIND_START_FAILED}
+    assert f.sleeps == []
+
+
+@pytest.mark.parametrize(
+    ("after", "error"),
+    [
+        (None, discovery.FIND_NO_NETWORK),
+        ({"iface": "wg0", "gateway": GW}, discovery.FIND_VPN),
+        ({"iface": "wlan0", "gateway": "192.168.1.254"}, discovery.FIND_NO_NETWORK),
+        ({"iface": "eth0", "gateway": GW}, discovery.FIND_NO_NETWORK),
+    ],
+)
+async def test_find_route_change_during_lookup_sends_nothing(after, error) -> None:
+    f = Finder([("192.168.1.20", mac(1), "wlan0")], resolved={"pc.lan": "192.168.1.20"})
+    real = f.resolve
+
+    async def resolve_then_move(host, timeout=None):
+        f.route = after
+        return await real(host, timeout)
+
+    f.resolve = resolve_then_move  # type: ignore[method-assign]
+    assert await f.find("pc.lan") == {"ok": False, "error": error}
+    assert f.sent == []
+
+
+def test_find_hostname_length_ignores_a_trailing_dot() -> None:
+    name = ".".join(["a" * 63] * 4)[:253]
+    assert discovery._typed_address(name + ".") == (name + ".", False)
+    assert discovery._typed_address(name + "a") is None
+
+
 async def test_find_hostname_uses_typed_name() -> None:
     f = Finder(
         [("192.168.1.20", mac(1), "wlan0")],
@@ -1210,7 +1245,7 @@ async def test_plugin_find_and_unload_never_yields(decky_env, sandbox, monkeypat
     monkeypatch.setattr(discovery, "local_ip", lambda _gw: OWN)
     monkeypatch.setattr(discovery, "iface_addr", lambda _iface: OWN)
     sent = []
-    monkeypatch.setattr(discovery, "send_one", lambda ip, own: sent.append(ip))
+    monkeypatch.setattr(discovery, "send_one", lambda ip, own: sent.append(ip) or True)
     started = asyncio.Event()
 
     async def hanging_resolve(host, timeout=None):

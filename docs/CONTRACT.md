@@ -266,32 +266,38 @@ automatic), including skipped and no-network outcomes for automation.
   - The whole scan is bounded at 15 s; running out of time after ARP was read
     returns what was found, before that an error. `cancel_scan` (and `_unload`,
     synchronously) cancels it; the pending call returns `cancelled: true`.
-  - Nothing found is stored; results only pre-fill the device editor.
+  - Nothing found is saved; results only pre-fill the device editor.
 - Find by address (`find_host`), only ever on the user's request, never from
   automation. Not subject to the scan's lock or cooldown, and needs no
   `confirm_away`; one find at a time (another -> `busy`, "Still looking — try again
   in a moment"). In order:
-  - The address must be a string of at most 253 characters that is an IPv4
-    literal or an RFC 1123 hostname (`devices.valid_host`; IPv6 is refused), else
+  - The address must be a string of at most 253 characters (not counting a
+    trailing dot) that is an IPv4 literal or an RFC 1123 hostname (`devices.valid_host`; IPv6 is refused), else
     "Enter an IP address or a hostname".
   - The default route, own address and on-link prefix come from the scan's
     checks (no route, VPN interface, own address, home ranges only), but the
     prefix is the real one, not narrowed to /24. These send nothing and run before
     any name lookup.
-  - A hostname is resolved with `resolve_host` (2 s); no IPv4 answer -> "Couldn't
-    find that name on this network".
-  - The address must lie inside that prefix ("That address isn't on this
-    network"), must not be this device's ("That's this device's own address") or
-    the prefix's network or broadcast address. None of these sends anything.
+  - A hostname is resolved with `resolve_host` (2 s). The default route is then
+    read again: gone or a different interface or gateway -> the no-network
+    message, or the VPN message if it is now a VPN interface. No IPv4 answer ->
+    "Couldn't find that name on this network".
+  - Then, in this order, none of which sends anything: this device's own address
+    -> "That's this device's own address"; outside that prefix -> "That address
+    isn't on this network"; the prefix's network or broadcast address -> "That
+    address isn't a device on this network".
   - A complete `/proc/net/arp` entry for it on that interface is returned without
     sending anything. Otherwise exactly one zero-length UDP datagram goes to port 9
     (the scan's socket setup: `SO_DONTROUTE`, bound to the own address) and ARP is
     re-read every 0.25 s for up to 2 s; no entry -> "No answer — is the PC on and
-    connected to this network?". A socket that can't be set up -> "Couldn't send
-    to that address".
+    connected to this network?". A socket that can't be set up, or a datagram
+    that wasn't sent -> "Couldn't send to that address", without polling.
   - Name: a typed hostname is used as typed (sanitised, trailing dot dropped,
     `name_source: "typed"`); for a typed IP, reverse DNS (1.5 s, `"dns"`). Empty ->
     `name: null`, `name_source: null`.
-  - Nothing is stored. `_unload` cancels a pending find synchronously; the pending
+  - Nothing is saved. `_unload` cancels a pending find synchronously; the pending
     call returns `cancelled: true`.
+- "Not saved" means no file is written for scan or find results. Their name
+  lookups still go through `netinfo`'s short-lived in-memory name caches, shared
+  with status checks and the picker, which are cleared on unload.
 - Stdlib only, Python 3.11. Logging via `decky.logger`.

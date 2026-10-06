@@ -224,7 +224,7 @@ store (`plugins.deckbrew.xyz`).
 
 Scan and find traffic never leaves your local network, apart from the DNS lookups.
 Nothing is sent anywhere else. Your settings stay on your device; devices found by a
-scan or a find are not stored.
+scan or a find are not saved.
 
 ## Contributing
 

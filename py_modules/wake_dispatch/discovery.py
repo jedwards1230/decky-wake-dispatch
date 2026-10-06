@@ -824,7 +824,7 @@ def _typed_address(address: Any) -> tuple[str, bool] | None:
     if not isinstance(address, str):
         return None
     text = address.strip()
-    if not text or len(text) > HOST_MAX or not valid_host(text):
+    if not text or len(text.rstrip(".")) > HOST_MAX or not valid_host(text):
         return None
     try:
         ip = ipaddress.ip_address(text)
@@ -866,6 +866,13 @@ async def _run_find(
     if not link["ok"]:
         return {"ok": False, "error": _FIND_LINK_ERRORS.get(link["error"], link["error"])}
     resolved = text if is_ip else await resolve(text, timeout=FIND_RESOLVE_TIMEOUT)
+    current = (route_probe or netinfo.default_route)()  # the lookup may have taken a while
+    if current is None or (current.get("iface"), current.get("gateway")) != (
+        link["iface"],
+        link["gateway"],
+    ):
+        moved_to_vpn = current is not None and _is_vpn(str(current.get("iface", "")))
+        return {"ok": False, "error": FIND_VPN if moved_to_vpn else FIND_NO_NETWORK}
     try:
         ip = ipaddress.IPv4Address(resolved)
     except (ValueError, TypeError):
@@ -882,9 +889,11 @@ async def _run_find(
     entry = _arp_entry(read(netinfo.PROC_ARP) or "", iface, target)
     if entry is None:
         try:
-            send(target, str(own))
+            sent = send(target, str(own))
         except OSError as exc:
             get_logger().error("Find could not send to %s: %s", target, exc)
+            return {"ok": False, "error": FIND_START_FAILED}
+        if not sent:
             return {"ok": False, "error": FIND_START_FAILED}
         deadline = clock() + FIND_WAIT
         while entry is None:

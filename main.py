@@ -1,7 +1,7 @@
 """Wake Dispatch backend entry point.
 
 Decky Loader imports this module and calls the public coroutine methods of
-``Plugin`` from the frontend (see docs/api.md for the frozen contract).
+``Plugin`` from the frontend (see docs/CONTRACT.md for the frozen contract).
 
 Decky's sandboxed plugin runner appends ``<plugin dir>/py_modules`` to
 ``sys.path`` before importing ``main``, so real logic lives in the

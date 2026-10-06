@@ -1,4 +1,4 @@
-// Typed bindings for the Wake Dispatch backend. Mirrors docs/api.md (contract v1).
+// Typed bindings for the Wake Dispatch backend. Mirrors docs/CONTRACT.md (contract v1).
 import { callable } from "@decky/api";
 
 export type Trigger = "manual" | "boot" | "resume";

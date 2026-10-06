@@ -45,6 +45,7 @@
         "react",
         "react-dom"
       ]
-    }
+    },
+    "onlyBuiltDependencies": []
   }
 }

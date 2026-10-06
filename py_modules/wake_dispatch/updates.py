@@ -1,7 +1,8 @@
 """Update check: ask GitHub for this plugin's latest release, never install anything.
 
-One HTTPS GET to ``API_URL`` at most once a day (plus backoff after failures and
-the user's "Check now"), parsed strictly. The result is cached in
+One HTTPS GET to ``API_URL`` when the user presses "Check for updates", plus at
+most once a day (with backoff after failures) if they opted in to the daily check,
+which is off by default. Responses are parsed strictly. The result is cached in
 ``<runtime dir>/update.json``; the on/off setting lives in
 ``<settings dir>/options.json``. Installing is left to Decky's own confirmation
 prompt, which the panel opens with the release's URL and sha256.
@@ -56,6 +57,8 @@ BACKOFF_BASE = 3600
 BACKOFF_MAX = 24 * 3600
 FUTURE_SKEW = 300  # a cached timestamp further ahead than this discards the cache
 
+# The automatic daily check is opt-in; "Check for updates" (force) works regardless.
+DEFAULT_ENABLED = False
 OPTIONS_FILE = "options.json"
 CACHE_FILE = "update.json"
 OPTIONS_VERSION = 1
@@ -353,10 +356,10 @@ def cache_path(runtime_dir: str) -> str:
 
 
 def load_update_check(settings_dir: str) -> bool:
-    """The update-check setting; on by default, and when the stored value isn't a bool."""
+    """The daily-check setting; ``DEFAULT_ENABLED`` (off) when missing or not a bool."""
     raw = storage.read_json(options_path(settings_dir))
     value = raw.get("update_check") if isinstance(raw, dict) else None
-    return value if isinstance(value, bool) else True
+    return value if isinstance(value, bool) else DEFAULT_ENABLED
 
 
 def save_update_check(settings_dir: str, enabled: bool) -> None:

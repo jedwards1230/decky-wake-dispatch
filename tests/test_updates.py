@@ -84,6 +84,13 @@ def dirs(tmp_path: Path) -> dict[str, Path]:
 
 
 def make(dirs: dict[str, Path], fetch: Any, clock: Clock | None = None, **kw: Any):
+    """An Updater for a user who turned the daily check on (it is off by default).
+
+    A test that stored its own setting first keeps it.
+    """
+    options = dirs["u-settings"] / "options.json"
+    if not options.exists():
+        options.write_text(json.dumps({"version": 1, "update_check": True}))
     return updates.Updater(
         settings_dir=lambda: str(dirs["u-settings"]),
         runtime_dir=lambda: str(dirs["u-runtime"]),
@@ -287,7 +294,7 @@ async def test_no_ca_bundle_fails_closed(dirs, tmp_path, monkeypatch) -> None:
         fetch=fetch,
         clock=Clock(),
     )
-    info = await updater.info()
+    info = await updater.info(force=True)
     assert (info["status"], info["error"]) == ("unavailable", updates.ERR_NO_TLS)
     assert fetch.calls == []
 
@@ -665,11 +672,12 @@ async def test_force_while_disabled_fetches(dirs) -> None:
 
 def test_setting_default_and_persistence(dirs) -> None:
     settings = str(dirs["u-settings"])
-    assert updates.load_update_check(settings) is True
-    assert updates.set_update_check(settings, False) == {"ok": True, "enabled": False}
+    assert updates.DEFAULT_ENABLED is False
     assert updates.load_update_check(settings) is False
+    assert updates.set_update_check(settings, True) == {"ok": True, "enabled": True}
+    assert updates.load_update_check(settings) is True
     on_disk = json.loads((dirs["u-settings"] / "options.json").read_text())
-    assert on_disk == {"version": 1, "update_check": False}
+    assert on_disk == {"version": 1, "update_check": True}
 
 
 @pytest.mark.parametrize("value", [None, 0, 1, "true", [], {}])
@@ -682,12 +690,12 @@ def test_setting_rejects_non_bool(dirs, value) -> None:
 @pytest.mark.parametrize("stored", ["yes", 0, None])
 def test_non_bool_stored_value_is_default(dirs, stored) -> None:
     (dirs["u-settings"] / "options.json").write_text(json.dumps({"update_check": stored}))
-    assert updates.load_update_check(str(dirs["u-settings"])) is True
+    assert updates.load_update_check(str(dirs["u-settings"])) is False
 
 
 def test_corrupt_options_is_default_and_quarantined(dirs) -> None:
     (dirs["u-settings"] / "options.json").write_text("{")
-    assert updates.load_update_check(str(dirs["u-settings"])) is True
+    assert updates.load_update_check(str(dirs["u-settings"])) is False
     assert list(dirs["u-settings"].glob("options.json.corrupt-*"))
 
 
@@ -737,6 +745,24 @@ async def test_installed_version_unreadable(dirs, content, caplog) -> None:
     )
 
 
+async def test_default_off_makes_no_request_but_check_now_works(dirs) -> None:
+    fetch = FakeFetch((200, body(release())))
+    updater = updates.Updater(
+        settings_dir=lambda: str(dirs["u-settings"]),
+        runtime_dir=lambda: str(dirs["u-runtime"]),
+        plugin_dir=lambda: str(dirs["u-plugin"]),
+        fetch=fetch,
+        make_context=lambda: object(),
+        clock=Clock(),
+    )
+    assert not (dirs["u-settings"] / "options.json").exists()
+    info = await updater.info()
+    assert (info["enabled"], info["status"], fetch.calls) == (False, "disabled", [])
+    info = await updater.info(force=True)
+    assert (info["enabled"], info["status"], len(fetch.calls)) == (False, "available", 1)
+    assert not (dirs["u-settings"] / "options.json").exists()  # a forced check changes no setting
+
+
 # --- through main.Plugin ---------------------------------------------------------------
 
 
@@ -747,6 +773,8 @@ async def test_plugin_callables(decky_env, monkeypatch) -> None:
     monkeypatch.setattr(updates, "https_fetch", fetch)
     monkeypatch.setattr(updates, "make_ssl_context", lambda: object())
     plugin = main.Plugin()
+    assert (await plugin.update_info())["status"] == "disabled"  # off by default
+    assert fetch.calls == []
     assert await plugin.set_update_check(False) == {"ok": True, "enabled": False}
     assert (await plugin.update_info())["status"] == "disabled"
     assert (await plugin.update_info("yes"))["status"] == "disabled"  # only True forces

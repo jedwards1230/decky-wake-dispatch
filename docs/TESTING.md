@@ -49,7 +49,7 @@ path the same way Decky does.
   and sleeps, and the synchronous `cancel`.
 - `test_updates.py`: the update check with an injected fetch and clock: strict release
   parsing, TLS context and fail-closed CA lookup, the HTTPS-only opener and redirect
-  guard, the thread helper, cadence (daily cache, backoff, the 60 s "Check now"
+  guard, the thread helper, cadence (daily cache, backoff, the 60 s "Check for updates"
   throttle, invalid or future caches), the setting, and that `_uninstall` keeps its
   files. `conftest.py` replaces the real fetch with one that fails the test.
 - `test_plugin.py`: end to end through `main.Plugin` with fake network files, including
@@ -99,10 +99,11 @@ Decky Loader:
    For automation, enable it on a device, then reboot or suspend for longer than 20
    seconds and check the "Last automatic wake" line.
 4. For the update check, install a build whose packaged version is older than the
-   latest release (`scripts/package.sh --version 0.0.1`), open the panel and check it
-   shows the newer version; press **Update** and check Decky's own confirmation names
-   Wake Dispatch and the new version (cancelling leaves the plugin installed). Turn the
-   check off and confirm the backend log shows no further update requests.
+   latest release (`scripts/package.sh --version 0.0.1`). Open the panel with the daily
+   check still off (the default) and confirm the backend log shows no update request;
+   press **Check for updates** and check it shows the newer version; press **Update**
+   and check Decky's own confirmation names Wake Dispatch and the new version
+   (cancelling leaves the plugin installed).
 5. Read the backend log at `~/homebrew/logs/wake-dispatch/` for errors.
 
 ## Avoid

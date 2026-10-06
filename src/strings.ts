@@ -223,10 +223,10 @@ export const UPDATE = {
   installed: (installed: string) => `Installed version v${installed}`,
   throttled: "Checked less than a minute ago",
   update: "Update",
-  checkNow: "Check now",
-  toggle: "Check for updates",
+  checkNow: "Check for updates",
+  toggle: "Check daily",
   toggleHint:
-    "Once a day, asks GitHub for the latest release. Nothing is installed without your confirmation.",
+    "Off by default. When on, asks GitHub for the latest release at most once a day, when you open this panel. Nothing is installed without your confirmation.",
   manual: "Install from URL: Decky settings → Developer → Install Plugin from URL, then paste:",
   installFailed: "Couldn't open Decky's installer. Install from the URL below instead.",
 };

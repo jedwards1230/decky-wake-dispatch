@@ -26,8 +26,8 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
   Never report or display a "sent" as "woken" — only a status check can say the PC is up,
   and `unknown` must never be shown as a failure.
 - **URL installs never auto-update.** Decky doesn't track plugins installed from a URL,
-  so users only learn of a fix from the panel's daily update check
-  (`wake_dispatch.updates`, which reads GitHub's `releases/latest`) and get it through
+  so users only learn of a fix from the panel's update check (`wake_dispatch.updates`,
+  which reads GitHub's `releases/latest`; on demand, or daily once opted in) and get it through
   Decky's install prompt or by reinstalling from
   `releases/latest/download/wake-dispatch.zip`. The asset name `wake-dispatch.zip` is
   therefore as frozen as the folder name, and every release must be marked latest.
@@ -112,8 +112,8 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
 7. **No network traffic beyond what the README's Privacy section lists**: the wakes the
    user triggers or enabled, status checks (and their name lookups) to configured
    hosts, reverse lookups for the network picker, and the update check (one HTTPS GET
-   to `api.github.com` at most daily, or on "Check now"; off when the user turns it
-   off).
+   to `api.github.com` when the user presses "Check for updates", plus at most daily
+   when they opted in to the daily check, which is off by default).
 
 ## Design discipline
 

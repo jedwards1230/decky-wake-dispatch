@@ -187,7 +187,8 @@ automatic), including skipped and no-network outcomes for automation.
   `force`: setting off -> no request, status `disabled`; setting on -> a request only
   if none was ever made, the last success is 24 h old, or the last attempt failed and
   its backoff (1 h, doubling per consecutive failure, at most 24 h) has passed. With
-  `force` (the "Check now" button, also when the setting is off): a request unless the
+  `force` (the "Check for updates" button, always available, also when the daily
+  setting is off): a request unless the
   last attempt was less than 60 s ago, in which case the cached result comes back with
   `throttled: true`.
 - Update status, first match wins (`unavailable` has two separate causes):
@@ -200,8 +201,8 @@ automatic), including skipped and no-network outcomes for automation.
      call -> `available` (newer) or `current`. A failed attempt with a success younger
      than 48 h reports that success, `error: null`.
 - Update files: setting `DECKY_PLUGIN_SETTINGS_DIR/options.json`
-  `{ "version": 1, "update_check": bool }` (missing, corrupt or non-bool -> on; other
-  keys preserved on write; not part of `export_config`). Cache
+  `{ "version": 1, "update_check": bool }` (the daily check, opt-in: missing, corrupt
+  or non-bool -> off; other keys preserved on write; not part of `export_config`). Cache
   `DECKY_PLUGIN_RUNTIME_DIR/update.json`
   `{ version: 1, attempt_at, success_at | null, failures, latest: UpdateRelease | null, error | null }`;
   any invalid or inconsistent field, or a timestamp more than 5 min in the future,

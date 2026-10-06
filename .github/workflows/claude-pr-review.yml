@@ -1,0 +1,73 @@
+# AI PR review via the shared claude-pr-review reusable (claude-code-action,
+# review-team plugin). Needs a CLAUDE_CODE_OAUTH_TOKEN (preferred) or
+# ANTHROPIC_API_KEY repository secret. When neither is available (not
+# configured yet, or a pull request from a fork, which never receives
+# secrets) the `credentials` gate makes the review job skip instead of fail.
+# This workflow is advisory: it is not a required status check.
+name: PR Review
+
+run-name: "PR Review: #${{ github.event.pull_request.number }} ${{ github.event.action }}"
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened, closed]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  credentials:
+    name: Check review credentials
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    permissions: {}
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check for a Claude credential
+        id: check
+        env:
+          HAS_OAUTH: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          HAS_API_KEY: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+        run: |
+          if [ "$HAS_OAUTH" = "true" ] || [ "$HAS_API_KEY" = "true" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "AI review: credential available, review runs." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=AI review skipped::No CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY secret is available to this run."
+            echo "AI review: skipped (no CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY available to this run)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  review:
+    needs: [credentials]
+    if: needs.credentials.outputs.available == 'true'
+    uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review.yml@v1
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }} # preferred (subscription)
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }} # fallback (metered API)
+    with:
+      focus: |
+        Wake Dispatch is a Decky Loader plugin for the Steam Deck: a React/TypeScript
+        Quick Access panel (src/, @decky/ui + @decky/api) over a Python 3.11
+        stdlib-only backend (main.py, py_modules/) that sends Wake-on-LAN magic
+        packets, optionally on boot and on resume.
+        - Backend: magic-packet construction, MAC/broadcast-address validation,
+          socket handling and timeouts, settings persistence, and anything that
+          could block or crash the Decky Loader event loop.
+        - Frontend: callable/backend contract drift between src/ and main.py,
+          React state and effect cleanup, controller (gamepad) navigation.
+        - Release/CI: the zip layout produced by scripts/package.sh and the
+          release workflow's permissions and tag handling.
+        Do NOT re-flag ruff, ruff format, tsc or actionlint findings — CI owns those.
+
+  cancel-review:
+    if: github.event.action == 'closed'
+    permissions:
+      actions: write
+    uses: jedwards1230/release-workflows/.github/workflows/claude-pr-review-cancel.yml@v1
+    with:
+      review_workflow: "PR Review"

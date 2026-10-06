@@ -54,6 +54,33 @@ the `wake-dispatch-zip` workflow artifact on every run.
 
 How to prove a change, beyond these commands, is in [docs/TESTING.md](docs/TESTING.md).
 
+## Installing a release on a device over CDP (dev only)
+
+`scripts/install-over-cdp.mjs` opens Decky Loader's install prompt for a published
+release on a device, so you don't have to type the URL on the device. It needs Node 22 or
+newer and no dependencies.
+
+On the device, turn on Steam's CEF remote debugging: Decky settings → Developer →
+**Allow Remote CEF Debugging**. Then, from your computer:
+
+```bash
+scripts/install-over-cdp.mjs 192.0.2.10 --dry-run          # latest release: show what would be installed
+scripts/install-over-cdp.mjs 192.0.2.10 v0.1.0             # open the prompt for v0.1.0
+scripts/install-over-cdp.mjs 192.0.2.10 --port 8081        # CEF port (8081 is the default)
+```
+
+The script resolves the release through the GitHub API and checks it the same way the
+plugin's update check does (tag format, not a draft or prerelease, exactly one
+`wake-dispatch.zip` asset, its download URL, size and sha256 digest). It then connects to
+the device's `SharedJSContext` target, checks whether Wake Dispatch is already installed,
+and asks Decky to install (or update) it with the release's sha256. `--dry-run` stops
+before that last step. The script never confirms anything: Decky shows its usual confirm
+dialog on the device, and nothing is installed until someone taps Install or Update there.
+
+**Security:** remote CEF debugging is unauthenticated. While it is on, anyone on your
+network can control the Steam client on port 8081 — including Decky's backend and its
+install route, which runs as root. Turn it off when you are not developing.
+
 ## Documentation
 
 Keep documentation current as part of the change, not as a follow-up — update the

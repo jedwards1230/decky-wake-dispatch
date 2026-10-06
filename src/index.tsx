@@ -1,43 +1,29 @@
-import { PanelSection, PanelSectionRow, staticClasses } from "@decky/ui";
-import { definePlugin } from "@decky/api";
-import { useEffect, useState } from "react";
+import { addEventListener, definePlugin, removeEventListener } from "@decky/api";
+import { staticClasses } from "@decky/ui";
 import { FaPowerOff } from "react-icons/fa";
 
-import { listDevices, type Device } from "./api";
+import { DISPATCHED_EVENT, type DispatchRecord } from "./api";
+import { Panel } from "./components/Panel";
+import { emitDispatched } from "./events";
+import { toastDispatchEvent } from "./notify";
+import { PLUGIN_NAME } from "./strings";
 
-function Content() {
-  const [devices, setDevices] = useState<Device[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+export default definePlugin(() => {
+  // One listener for the plugin's lifetime: toast (manual wakes from this panel
+  // toast themselves) and fan out to whatever panel is mounted.
+  const onDispatched = (record: DispatchRecord) => {
+    toastDispatchEvent(record);
+    emitDispatched(record);
+  };
+  addEventListener<[DispatchRecord]>(DISPATCHED_EVENT, onDispatched);
 
-  useEffect(() => {
-    listDevices()
-      .then(setDevices)
-      .catch((e: unknown) => setError(String(e)));
-  }, []);
-
-  let body: string;
-  if (error !== null) {
-    body = `Could not load devices: ${error}`;
-  } else if (devices === null) {
-    body = "Loading…";
-  } else if (devices.length === 0) {
-    body = "No devices yet.";
-  } else {
-    body = `${devices.length} device(s) configured.`;
-  }
-
-  return (
-    <PanelSection title="Devices">
-      <PanelSectionRow>
-        <div>{body}</div>
-      </PanelSectionRow>
-    </PanelSection>
-  );
-}
-
-export default definePlugin(() => ({
-  name: "Wake Dispatch",
-  titleView: <div className={staticClasses.Title}>Wake Dispatch</div>,
-  content: <Content />,
-  icon: <FaPowerOff />,
-}));
+  return {
+    name: PLUGIN_NAME,
+    titleView: <div className={staticClasses.Title}>{PLUGIN_NAME}</div>,
+    content: <Panel />,
+    icon: <FaPowerOff />,
+    onDismount() {
+      removeEventListener(DISPATCHED_EVENT, onDispatched);
+    },
+  };
+});

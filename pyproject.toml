@@ -16,3 +16,4 @@ known-third-party = ["decky"]
 testpaths = ["tests"]
 pythonpath = [".", "py_modules"]
 asyncio_mode = "auto"
+markers = ["real_dns: allow real socket.getaddrinfo / gethostbyaddr calls in this test"]

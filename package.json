@@ -1,0 +1,50 @@
+{
+  "name": "decky-wake-dispatch",
+  "version": "0.1.0",
+  "description": "Decky Loader plugin that sends Wake-on-LAN magic packets from the Steam Quick Access menu, with optional wake on boot and resume.",
+  "type": "module",
+  "scripts": {
+    "build": "rollup -c",
+    "watch": "rollup -c -w",
+    "typecheck": "tsc --noEmit"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jedwards1230/decky-wake-dispatch.git"
+  },
+  "keywords": [
+    "decky",
+    "plugin",
+    "steam-deck",
+    "wake-on-lan",
+    "wol"
+  ],
+  "author": "jedwards1230",
+  "license": "BSD-3-Clause",
+  "bugs": {
+    "url": "https://github.com/jedwards1230/decky-wake-dispatch/issues"
+  },
+  "homepage": "https://github.com/jedwards1230/decky-wake-dispatch#readme",
+  "packageManager": "pnpm@9.15.9",
+  "devDependencies": {
+    "@decky/rollup": "^1.0.2",
+    "@decky/ui": "~4.12.1",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "rollup": "^4.64.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@decky/api": "1.1.3",
+    "react-icons": "^5.7.0",
+    "tslib": "^2.8.1"
+  },
+  "pnpm": {
+    "peerDependencyRules": {
+      "ignoreMissing": [
+        "react",
+        "react-dom"
+      ]
+    }
+  }
+}

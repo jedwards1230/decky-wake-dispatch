@@ -1,0 +1,48 @@
+# Dependabot version updates. The labels named below must exist in the repo
+# (Dependabot silently drops labels it cannot apply).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["dependency", "chore"]
+    commit-message:
+      prefix: "deps(actions)"
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["dependency", "chore"]
+    commit-message:
+      prefix: "deps(npm)"
+    groups:
+      npm:
+        patterns: ["*"]
+    ignore:
+      # @decky/api is pinned exactly and @decky/ui to 4.12.x to match the
+      # loader's runtime; bump these deliberately, not via Dependabot.
+      - dependency-name: "@decky/api"
+      - dependency-name: "@decky/ui"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels: ["dependency", "chore"]
+    commit-message:
+      prefix: "deps(pip)"
+    groups:
+      pip:
+        patterns: ["*"]

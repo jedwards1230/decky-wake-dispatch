@@ -1,0 +1,11 @@
+{
+  "name": "Wake Dispatch",
+  "author": "jedwards1230",
+  "flags": [],
+  "api_version": 1,
+  "publish": {
+    "tags": ["wake-on-lan", "network", "utility"],
+    "description": "Wake your PCs with Wake-on-LAN from the Quick Access menu, with optional wake on boot and resume.",
+    "image": "https://opengraph.githubassets.com/1/jedwards1230/decky-wake-dispatch"
+  }
+}

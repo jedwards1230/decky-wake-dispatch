@@ -170,7 +170,7 @@ automatic), including skipped and no-network outcomes for automation.
 - Update check (`wake_dispatch.updates`): one HTTPS GET to
   `https://api.github.com/repos/jedwards1230/decky-wake-dispatch/releases/latest` with
   `User-Agent: wake-dispatch/<installed>`, run on a daemon thread (5 s socket timeout,
-  7 s overall). TLS verifies certificate and hostname (TLS 1.2+) against the first
+  the body read in chunks against a 5 s deadline, 7 s overall). TLS verifies certificate and hostname (TLS 1.2+) against the first
   existing of `/etc/ssl/certs/ca-certificates.crt`, `/etc/ssl/cert.pem`, else `certifi`;
   with none the check is `unavailable` and nothing is sent. HTTPS only; redirects are
   followed only to `https://api.github.com/`. A body over 512 KiB or a non-200 status
@@ -190,9 +190,10 @@ automatic), including skipped and no-network outcomes for automation.
   `force` (the "Check now" button, also when the setting is off): a request unless the
   last attempt was less than 60 s ago, in which case the cached result comes back with
   `throttled: true`.
-- Update status: `disabled` (setting off and not forced this call); `unchecked` (no
-  attempt yet); `unavailable` (installed version unreadable, or the last attempt failed
-  and there is no success younger than 48 h); otherwise the cached release is compared
+- Update status, first match wins: `disabled` (setting off and not forced this call,
+  even if the installed version is unreadable); `unavailable` (installed version
+  unreadable); `unchecked` (no attempt yet); `unavailable` (the last attempt failed and
+  there is no success younger than 48 h); otherwise the cached release is compared
   with the installed version on every call -> `available` (newer) or `current`. A failed
   attempt with a success younger than 48 h reports that success, `error: null`.
 - Update files: setting `DECKY_PLUGIN_SETTINGS_DIR/options.json`

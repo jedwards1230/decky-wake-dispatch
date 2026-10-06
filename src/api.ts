@@ -58,6 +58,29 @@ export type MacValidation = { ok: true; mac: string } | { ok: false; error: stri
 
 export type ImportMode = "replace" | "merge";
 
+export type UpdateStatus = "disabled" | "unchecked" | "current" | "available" | "unavailable";
+
+export interface UpdateRelease {
+  version: string;
+  url: string;
+  sha256: string; // 64 lowercase hex characters, no "sha256:" prefix
+  size: number;
+}
+
+export interface UpdateInfo {
+  enabled: boolean;
+  installed: string | null;
+  status: UpdateStatus;
+  latest: string | null;
+  release: UpdateRelease | null;
+  checked_at: number | null;
+  error: string | null;
+  throttled: boolean;
+  manual_url: string;
+}
+
+export type UpdateCheckSaved = { ok: true; enabled: boolean } | { ok: false; error: string };
+
 /** Event emitted by the backend after every wake, with a DispatchRecord payload. */
 export const DISPATCHED_EVENT = "dispatched";
 
@@ -71,3 +94,5 @@ export const currentNetwork = callable<[], Network | null>("current_network");
 export const neighbours = callable<[], Neighbour[]>("neighbours");
 export const exportConfig = callable<[], string>("export_config");
 export const importConfig = callable<[text: string, mode: ImportMode], Saved>("import_config");
+export const updateInfo = callable<[force: boolean], UpdateInfo>("update_info");
+export const setUpdateCheck = callable<[enabled: boolean], UpdateCheckSaved>("set_update_check");

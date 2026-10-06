@@ -1,11 +1,18 @@
-# Wake Dispatch backend API contract (v1, frozen)
+# Wake Dispatch backend contract (v1, frozen)
+
+The interface between the panel (`src/`) and the backend (`main.py`), plus the on-disk
+files and behaviour the backend guarantees. It is frozen: callables, argument order and
+return shapes don't change incompatibly. Additive changes update this file and
+`src/api.ts` (which mirrors §1 and §2 as TypeScript) in the same PR.
+`tests/test_smoke.py` (its `CONTRACT_CALLABLES` list mirrors §2) checks that every
+callable exists on `Plugin` and is async.
 
 The frontend calls these with `callable<...>(name)` from `@decky/api`. All are
 `async` methods on `class Plugin` in `main.py`. Arguments are positional.
 Errors the user should see are returned as data (`ok: false` + `error`), never
 raised, except for programmer errors.
 
-## Types
+## §1 Types
 
 ```ts
 type Trigger = "manual" | "boot" | "resume";
@@ -46,7 +53,7 @@ interface Network { iface: string; gateway: string } // current default route
 type Saved = { ok: true; devices: Device[] } | { ok: false; error: string; field?: string; index?: number };
 ```
 
-## Callables
+## §2 Callables
 
 | name | args | returns |
 |------|------|---------|
@@ -61,12 +68,12 @@ type Saved = { ok: true; devices: Device[] } | { ok: false; error: string; field
 | `export_config` | — | `string` (pretty JSON of the settings file, `{version, devices}`) |
 | `import_config` | `text: string`, `mode: "replace" \| "merge"` | `Saved` (merge = upsert by id, then by MAC) |
 
-## Event
+## §3 Event
 
 `decky.emit("dispatched", record: DispatchRecord)` after every `wake` (manual or
 automatic), including skipped and no-network outcomes for automation.
 
-## Behaviour rules
+## §4 Behaviour rules
 
 - Manual wake: always sends (no gateway gate), burst at 0/1/2 s, network wait 5 s.
 - Automatic wake: only devices with the trigger in `auto` and `home_gateway` null
@@ -77,16 +84,20 @@ automatic), including skipped and no-network outcomes for automation.
   wait for a route; save the boot_id only once a route was found, then dispatch.
   Zero devices configured must not crash (record outcome `skipped`, reason
   "No devices opted in").
-- Resume: a background task sleeps 5 s in a loop; a wall-clock gap > 20 s means
-  the process was frozen in suspend -> dispatch `resume`. Log resume -> route-up
-  time.
+- Resume: a background task sleeps 5 s in a loop; a gap > 20 s of elapsed real
+  time between ticks (`CLOCK_BOOTTIME`, which keeps counting through suspend and
+  ignores wall-clock steps; wall time only where it is unavailable) means the
+  process was frozen in suspend -> dispatch `resume`. A resume that arrives while
+  another is still running is dropped. Log resume -> route-up time.
 - Per-device error isolation: one device raising OSError/ValueError does not stop
   the others.
 - Files: settings `DECKY_PLUGIN_SETTINGS_DIR/devices.json` `{ "version": 1, "devices": [...] }`;
   state `DECKY_PLUGIN_RUNTIME_DIR/state.json`. Writes are atomic (temp file in the
   same dir, fsync, `os.replace`). Unknown/older versions are migrated on read
-  (bare list or missing version -> v1). A corrupt file is renamed `*.corrupt-<ts>`
-  and treated as empty, logged.
+  (bare list or missing version -> v1). A settings file from a newer schema is read
+  best-effort and copied once to `devices.json.v<N>.bak`; a stored device that fails
+  validation is dropped only after the file is copied to `devices.json.bak-<ts>`. A
+  corrupt file is renamed `*.corrupt-<ts>` and treated as empty, logged.
 - Magic packet: 6 x 0xFF + MAC x 16 (102 bytes), + 6-byte SecureOn (108 bytes).
   UDP, SO_BROADCAST, to (`broadcast`, `port`).
 - Stdlib only, Python 3.11. Logging via `decky.logger`.

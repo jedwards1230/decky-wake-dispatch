@@ -48,6 +48,7 @@ TIMEOUT = 5.0  # urllib socket timeout
 OVERALL_TIMEOUT_EXTRA = 2.0  # the asyncio wait is TIMEOUT plus this
 MAX_BODY = 512 * 1024
 MAX_ASSET_SIZE = 5 * 1024 * 1024
+READ_CHUNK = 16 * 1024
 
 CHECK_INTERVAL = 24 * 3600
 MANUAL_MIN_INTERVAL = 60
@@ -171,20 +172,47 @@ def build_opener(context: ssl.SSLContext) -> urllib.request.OpenerDirector:
 
 
 def https_fetch(
-    url: str, headers: dict[str, str], timeout: float, limit: int, context: ssl.SSLContext
+    url: str,
+    headers: dict[str, str],
+    timeout: float,
+    limit: int,
+    context: ssl.SSLContext,
+    *,
+    opener_factory: Callable[[ssl.SSLContext], Any] | None = None,
+    clock: Callable[[], float] = time.monotonic,
 ) -> tuple[int, bytes]:
-    """Blocking GET; returns ``(status, up to limit + 1 bytes of body)``. Runs on a thread."""
+    """Blocking GET; returns ``(status, up to limit + 1 bytes of body)``. Runs on a thread.
+
+    urllib's ``timeout`` applies to each socket operation, so the body is read in
+    chunks against an overall ``timeout`` deadline: a server dripping bytes can't
+    keep this thread reading. Past the deadline the response is closed and
+    ``TimeoutError`` raised.
+    """
     if not is_api_url(url):
         raise ValueError(f"refusing to fetch {url!r}")
+    deadline = clock() + timeout
     request = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with build_opener(context).open(request, timeout=timeout) as response:
-            return response.status, response.read(limit + 1)
+        response = (opener_factory or build_opener)(context).open(request, timeout=timeout)
     except RedirectRefused:
         raise
     except urllib.error.HTTPError as exc:
         exc.close()
         return exc.code, b""
+    with contextlib.closing(response):
+        # read1 returns after at most one underlying read, so the deadline is checked often.
+        read = getattr(response, "read1", None) or response.read
+        chunks: list[bytes] = []
+        total = 0
+        while total <= limit:
+            if clock() > deadline:
+                raise TimeoutError(f"response not finished within {timeout} s")
+            chunk = read(min(READ_CHUNK, limit + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+        return response.status, b"".join(chunks)
 
 
 async def run_in_thread(func: Callable[..., Any], *args: Any, timeout: float) -> Any:
@@ -261,7 +289,7 @@ def parse_release(body: bytes) -> dict[str, Any]:
 
     try:
         doc = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise bad(f"invalid JSON: {exc}") from exc
     if not isinstance(doc, dict):
         raise bad("top level is not an object")
@@ -425,10 +453,12 @@ class Updater:
         self._memory: dict[str, Any] | None = None  # used when update.json can't be written
 
     def _load_cache(self, now: float) -> dict[str, Any] | None:
-        cache = validate_cache(storage.read_json(cache_path(self._runtime_dir())), now)
-        if cache is None and self._memory is not None:
-            cache = validate_cache(self._memory, now)
-        return cache
+        """The newer of update.json and this process's last result (kept when writes fail)."""
+        disk = validate_cache(storage.read_json(cache_path(self._runtime_dir())), now)
+        memory = validate_cache(self._memory, now) if self._memory is not None else None
+        if memory is not None and (disk is None or memory["attempt_at"] > disk["attempt_at"]):
+            return memory
+        return disk
 
     def _store_cache(self, cache: dict[str, Any]) -> None:
         self._memory = cache
@@ -501,7 +531,12 @@ class Updater:
                 raise CheckError(ERR_ANSWER, f"HTTP status {status}")
             if len(body) > MAX_BODY:
                 raise CheckError(ERR_ANSWER, f"response larger than {MAX_BODY} bytes")
-            release = parse_release(body)
+            try:
+                release = parse_release(body)
+            except CheckError:
+                raise
+            except Exception as exc:  # backstop: a parser bug must not reach the panel
+                raise CheckError(ERR_ANSWER, f"could not parse the release: {exc!r}") from exc
         except CheckError as exc:
             get_logger().warning("Update check failed: %s", exc.reason)
             cache = {
@@ -547,11 +582,11 @@ class Updater:
             "throttled": throttled,
             "manual_url": MANUAL_URL,
         }
-        if installed is None:
-            info.update(status="unavailable", error=ERR_INSTALLED)
-            return info
         if not shown:
             info["status"] = "disabled"
+            return info
+        if installed is None:
+            info.update(status="unavailable", error=ERR_INSTALLED)
             return info
         if cache is None:
             return info

@@ -779,3 +779,126 @@ def test_frontend_constants_match() -> None:
     source = (PLUGIN_ROOT / "src" / "update.ts").read_text()
     assert f'export const PLUGIN_NAME = "{name}";' in source
     assert "github\\.com\\/jedwards1230\\/decky-wake-dispatch\\/releases\\/download" in source
+
+
+# --- review fixes ----------------------------------------------------------------------
+
+
+async def test_deeply_nested_json_is_unavailable(dirs) -> None:
+    with pytest.raises(updates.CheckError):
+        updates.parse_release(b"[" * 200_000)
+    info = await make(dirs, FakeFetch((200, b"[" * 200_000))).info()
+    assert (info["status"], info["error"]) == ("unavailable", updates.ERR_ANSWER)
+
+
+async def test_parser_bug_is_contained(dirs, monkeypatch) -> None:
+    def broken(_body: bytes) -> dict[str, Any]:
+        raise KeyError("bug")
+
+    monkeypatch.setattr(updates, "parse_release", broken)
+    info = await make(dirs, FakeFetch((200, body(release())))).info()
+    assert (info["status"], info["error"]) == ("unavailable", updates.ERR_ANSWER)
+
+
+class FakeResponse:
+    def __init__(self, chunk: bytes, status: int = 200, clock: Clock | None = None) -> None:
+        self.chunk = chunk
+        self.status = status
+        self.clock = clock
+        self.closed = False
+        self.reads: list[int] = []
+
+    def read1(self, n: int) -> bytes:
+        self.reads.append(n)
+        if self.clock is not None:
+            self.clock.now += 1.0  # each read takes a second
+        return self.chunk[:n]
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeOpener:
+    def __init__(self, result: Any) -> None:
+        self.result = result
+        self.timeouts: list[float] = []
+
+    def open(self, _request: Any, timeout: float) -> Any:
+        self.timeouts.append(timeout)
+        if isinstance(self.result, BaseException):
+            raise self.result
+        return self.result
+
+
+def _fetch_with(opener: FakeOpener, clock: Clock | None = None, timeout: float = 5.0):
+    return REAL_HTTPS_FETCH(
+        updates.API_URL,
+        {},
+        timeout,
+        100,
+        ssl.create_default_context(),
+        opener_factory=lambda _ctx: opener,
+        clock=clock or Clock(),
+    )
+
+
+def test_https_fetch_truncates_at_limit_plus_one() -> None:
+    response = FakeResponse(b"x" * 64)
+    status, data = _fetch_with(FakeOpener(response))
+    assert status == 200 and data == b"x" * 101
+    assert response.closed and all(n <= updates.READ_CHUNK for n in response.reads)
+
+
+def test_https_fetch_reads_to_eof() -> None:
+    class Short(FakeResponse):
+        def read1(self, n: int) -> bytes:
+            data, self.chunk = self.chunk[:n], self.chunk[n:]
+            return data
+
+    response = Short(b'{"a": 1}')
+    assert _fetch_with(FakeOpener(response)) == (200, b'{"a": 1}')
+    assert response.closed
+
+
+def test_https_fetch_deadline_aborts_slow_drip() -> None:
+    clock = Clock()
+    response = FakeResponse(b"x", clock=clock)  # one byte per second, forever
+    with pytest.raises(TimeoutError):
+        _fetch_with(FakeOpener(response), clock, timeout=5.0)
+    assert response.closed and len(response.reads) == 6  # reads at t=0..5, abort past 5 s
+
+
+def test_https_fetch_http_error_returns_status() -> None:
+    import io
+
+    error = urllib.error.HTTPError(updates.API_URL, 404, "Not Found", {}, io.BytesIO(b"no"))
+    assert _fetch_with(FakeOpener(error)) == (404, b"")
+
+
+def test_https_fetch_redirect_refusal_propagates() -> None:
+    with pytest.raises(updates.RedirectRefused):
+        _fetch_with(FakeOpener(updates.RedirectRefused("off host")))
+
+
+async def test_newer_memory_beats_stale_disk_cache(dirs, monkeypatch) -> None:
+    clock = Clock()
+    stale = dict(GOOD_CACHE, attempt_at=clock.now - 3 * 86400, success_at=clock.now - 3 * 86400)
+    (dirs["u-runtime"] / "update.json").write_text(json.dumps(stale))
+
+    def boom(*_a: Any) -> None:
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(updates.storage, "atomic_write_json", boom)
+    fetch = FakeFetch((200, body(release("0.1.0"))))
+    updater = make(dirs, fetch, clock)
+    assert (await updater.info())["status"] == "current"
+    clock.now += 10
+    info = await updater.info()
+    assert len(fetch.calls) == 1 and info["status"] == "current"
+
+
+async def test_disabled_wins_over_unreadable_version(dirs) -> None:
+    updates.set_update_check(str(dirs["u-settings"]), False)
+    (dirs["u-plugin"] / "package.json").unlink()
+    info = await make(dirs, FakeFetch((200, b""))).info()
+    assert (info["status"], info["error"], info["installed"]) == ("disabled", None, None)

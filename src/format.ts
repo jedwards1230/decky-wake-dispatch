@@ -1,13 +1,14 @@
 import type { AutoTrigger, DeviceResult, DispatchRecord, Trigger } from "./api";
+import { AUTOMATION, LAST, names } from "./strings";
 
 /** "Manual only" / "Wakes on boot" / "Wakes on resume" / "Wakes on boot and resume". */
 export function automationSummary(auto: readonly AutoTrigger[]): string {
   const boot = auto.includes("boot");
   const resume = auto.includes("resume");
-  if (boot && resume) return "Wakes on boot and resume";
-  if (boot) return "Wakes on boot";
-  if (resume) return "Wakes on resume";
-  return "Manual only";
+  if (boot && resume) return AUTOMATION.both;
+  if (boot) return AUTOMATION.boot;
+  if (resume) return AUTOMATION.resume;
+  return AUTOMATION.manual;
 }
 
 export function triggerLabel(trigger: Trigger): string {
@@ -41,34 +42,33 @@ export function resultsWith(record: DispatchRecord, status: DeviceResult["status
   return Object.values(record.results).filter((r) => r.status === status);
 }
 
-/** "Gaming PC", "Gaming PC and Office PC", "3 devices". */
 export function nameList(results: DeviceResult[]): string {
-  if (results.length === 1) return results[0].name;
-  if (results.length === 2) return `${results[0].name} and ${results[1].name}`;
-  return `${results.length} devices`;
+  return names(results.map((r) => r.name));
 }
 
-/** Outcome part of the "Last automatic wake" line. */
-export function outcomeSummary(record: DispatchRecord): string {
+/**
+ * "Last automatic wake: on boot, 2 min ago — sent to Gaming PC" when something
+ * was sent; otherwise lead with the outcome: "Automatic wake on boot was
+ * skipped, 3 h ago: not on home network".
+ */
+export function lastAutomationLine(record: DispatchRecord, nowMs: number = Date.now()): string {
+  const when = triggerLabel(record.trigger);
+  const ago = relativeTime(record.at, nowMs);
   const sent = resultsWith(record, "sent");
   const failed = resultsWith(record, "error");
   switch (record.outcome) {
     case "sent":
-      return sent.length > 0 ? `sent to ${nameList(sent)}` : "sent";
+      return LAST.sent(when, ago, sent.length > 0 ? LAST.sentTo(nameList(sent)) : LAST.sentBare);
     case "partial":
-      return `sent to ${nameList(sent)}; ${failed.length} couldn't be sent`;
+      return LAST.sent(when, ago, LAST.sentPartial(nameList(sent), failed.length));
     case "failed":
-      return failed[0]?.error ? `couldn't send: ${lowerFirst(failed[0].error)}` : "couldn't send";
+      return LAST.failed(when, ago, lowerFirst(failed[0]?.error ?? LAST.unknownError));
     case "no_network":
-      return `skipped: ${lowerFirst(record.reason ?? "no network connection")}`;
+      return LAST.skipped(when, ago, lowerFirst(record.reason ?? LAST.noNetwork));
     case "skipped":
     default:
-      return `skipped: ${lowerFirst(record.reason ?? "nothing to wake")}`;
+      return LAST.skipped(when, ago, lowerFirst(record.reason ?? LAST.nothingToWake));
   }
-}
-
-export function lastAutomationLine(record: DispatchRecord, nowMs: number = Date.now()): string {
-  return `Last automatic wake: ${triggerLabel(record.trigger)}, ${relativeTime(record.at, nowMs)} — ${outcomeSummary(record)}`;
 }
 
 /** Turn an unknown thrown value into a log-friendly string. */

@@ -3,8 +3,26 @@
 // they write through these functions and the panel re-renders via useDevices().
 import { useEffect, useState } from "react";
 
-import { listDevices, saveDevices, wake, type Device, type DispatchRecord, type Saved } from "./api";
-import { scheduleNoReplyCheck, toastDispatch, toastError, toastInfo } from "./notify";
+import {
+  currentNetwork,
+  listDevices,
+  saveDevices,
+  status,
+  wake,
+  type Device,
+  type DispatchRecord,
+  type Saved,
+  type Status,
+} from "./api";
+import {
+  checkableDevices,
+  scheduleNoReplyCheck,
+  toastDispatch,
+  toastError,
+  toastInfo,
+  withManualWake,
+} from "./notify";
+import { S, TOAST } from "./strings";
 
 export interface DevicesSnapshot {
   devices: Device[] | null; // null = not loaded yet
@@ -85,9 +103,9 @@ export async function deleteDevice(id: string): Promise<void> {
   try {
     const current = await listDevices();
     const result = await writeList(current.filter((d) => d.id !== id));
-    if (!result.ok) toastInfo("Couldn't delete the device", result.error);
+    if (!result.ok) toastInfo(S.deleteFailed, result.error);
   } catch (e) {
-    toastError("Couldn't delete the device", e);
+    toastError(S.deleteFailed, e);
   }
 }
 
@@ -96,17 +114,43 @@ export function replaceDevices(devices: Device[]): void {
   publish({ devices, failed: false });
 }
 
-/** Manual wake: always sends. Toasts once (deduplicated against the event) and schedules the no-reply check. */
-export async function wakeManual(ids: string[] | null): Promise<DispatchRecord | null> {
-  let record: DispatchRecord;
+/** True when a target has a home network set and the current gateway (best effort) differs. */
+async function offHomeNetwork(targets: Device[]): Promise<boolean> {
+  const gateways = targets.map((d) => d.home_gateway).filter((g): g is string => g !== null);
+  if (gateways.length === 0) return false;
   try {
-    record = await wake(ids, "manual");
-  } catch (e) {
-    toastError("Couldn't send the wake", e);
-    return null;
+    const net = await currentNetwork();
+    return net !== null && gateways.some((g) => g !== net.gateway);
+  } catch {
+    return false;
   }
-  toastDispatch(record);
-  setTimeout(requestStatusRefresh, 4_000);
-  scheduleNoReplyCheck(record, snapshot.devices ?? [], requestStatusRefresh);
-  return record;
+}
+
+/**
+ * Manual wake: always sends. Toasts once (the event path stands aside while this
+ * runs) and schedules the follow-up status check. A status snapshot taken
+ * alongside the wake tells the follow-up which devices were already awake.
+ */
+export async function wakeManual(ids: string[] | null): Promise<DispatchRecord | null> {
+  const devices = snapshot.devices ?? [];
+  const targets = ids === null ? devices : devices.filter((d) => ids.includes(d.id));
+  const checkIds = checkableDevices(null, targets).map((d) => d.id);
+  const before: Promise<Record<string, Status>> =
+    checkIds.length > 0 ? status(checkIds).catch(() => ({})) : Promise.resolve({});
+  const offHome = offHomeNetwork(targets);
+
+  return withManualWake(async () => {
+    let record: DispatchRecord;
+    try {
+      record = await wake(ids, "manual");
+    } catch (e) {
+      toastError(TOAST.couldntSend, e);
+      return null;
+    }
+    const sentSomething = record.outcome === "sent" || record.outcome === "partial";
+    toastDispatch(record, sentSomething && (await offHome) ? TOAST.offHomeNetwork : undefined);
+    setTimeout(requestStatusRefresh, 4_000);
+    scheduleNoReplyCheck(record, devices, before, requestStatusRefresh);
+    return record;
+  });
 }

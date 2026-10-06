@@ -9,7 +9,7 @@ import {
   ToggleField,
   showModal,
 } from "@decky/ui";
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { importConfig, listDevices } from "../api";
 import { toastInfo } from "../notify";
@@ -17,8 +17,15 @@ import { replaceDevices } from "../store";
 import { BACKUP } from "../strings";
 import { InlineError } from "./InlineError";
 
+/** Resolves exactly once: OK → true, Cancel/B → false, any other close → false. */
 function confirmReplace(count: number): Promise<boolean> {
   return new Promise((resolve) => {
+    let done = false;
+    const settle = (value: boolean) => {
+      if (done) return;
+      done = true;
+      resolve(value);
+    };
     showModal(
       <ConfirmModal
         strTitle={BACKUP.importConfirmTitle}
@@ -26,11 +33,12 @@ function confirmReplace(count: number): Promise<boolean> {
         strOKButtonText={BACKUP.importConfirmOk}
         strCancelButtonText={BACKUP.cancel}
         bDestructiveWarning
-        onOK={() => resolve(true)}
-        onCancel={() => resolve(false)}
+        onOK={() => settle(true)}
+        onCancel={() => settle(false)}
       />,
       undefined,
-      { fnOnClose: () => resolve(false) },
+      // Deferred so an onOK that fires during close still wins.
+      { fnOnClose: () => setTimeout(() => settle(false), 0) },
     );
   });
 }
@@ -41,9 +49,10 @@ export function ImportModal({ closeModal }: { closeModal?: () => void }) {
   const [replace, setReplace] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const working = useRef(false);
 
   const submit = async () => {
-    if (busy) return;
+    if (working.current) return;
     const trimmed = text.trim();
     if (trimmed === "") return setError(BACKUP.importEmpty);
     try {
@@ -52,24 +61,27 @@ export function ImportModal({ closeModal }: { closeModal?: () => void }) {
       return setError(BACKUP.importNotJson);
     }
     setError(null);
-    setBusy(true);
+    working.current = true;
     try {
       if (replace) {
         const current = await listDevices();
         if (current.length > 0 && !(await confirmReplace(current.length))) return;
       }
+      setBusy(true);
       const result = await importConfig(trimmed, replace ? "replace" : "merge");
       if (!result.ok) {
         setError(result.error);
         return;
       }
       replaceDevices(result.devices);
-      toastInfo(BACKUP.imported(result.devices.length), replace ? "Replaced your device list." : "Merged with your device list.");
+      const n = result.devices.length;
+      toastInfo(BACKUP.imported, replace ? BACKUP.importedReplace(n) : BACKUP.importedMerge(n));
       closeModal?.();
     } catch (e) {
       console.error("[Wake Dispatch] import_config failed", e);
-      setError("Couldn't import. Try again, or restart Decky Loader.");
+      setError(BACKUP.importFailed);
     } finally {
+      working.current = false;
       setBusy(false);
     }
   };

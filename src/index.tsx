@@ -5,14 +5,14 @@ import { FaPowerOff } from "react-icons/fa";
 import { DISPATCHED_EVENT, type DispatchRecord } from "./api";
 import { Panel } from "./components/Panel";
 import { emitDispatched } from "./events";
-import { toastDispatch } from "./notify";
+import { toastDispatchEvent } from "./notify";
 import { PLUGIN_NAME } from "./strings";
 
 export default definePlugin(() => {
-  // One listener for the plugin's lifetime: toast (deduplicated against the
-  // manual wake path) and fan out to whatever panel is mounted.
+  // One listener for the plugin's lifetime: toast (manual wakes from this panel
+  // toast themselves) and fan out to whatever panel is mounted.
   const onDispatched = (record: DispatchRecord) => {
-    toastDispatch(record);
+    toastDispatchEvent(record);
     emitDispatched(record);
   };
   addEventListener<[DispatchRecord]>(DISPATCHED_EVENT, onDispatched);

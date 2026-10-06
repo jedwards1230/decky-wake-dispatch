@@ -1,4 +1,13 @@
-import { DialogButton, DialogFooter, DialogHeader, Focusable, ModalRoot, Spinner, TextField } from "@decky/ui";
+import {
+  DialogButton,
+  DialogFooter,
+  DialogHeader,
+  Focusable,
+  ModalRoot,
+  ScrollPanelGroup,
+  Spinner,
+  TextField,
+} from "@decky/ui";
 import { useEffect, useState } from "react";
 
 import { exportConfig } from "../api";
@@ -17,7 +26,7 @@ function compact(text: string): string {
 /**
  * Shows the exported settings. There is no typed text-clipboard API in the Steam
  * client bindings, so the field uses Steam's own copy action (bShowCopyAction)
- * and the readable form is shown below it.
+ * and the readable form is shown below it in a gamepad-scrollable panel.
  */
 export function ExportModal({ closeModal }: { closeModal?: () => void }) {
   const [text, setText] = useState<string | null>(null);
@@ -45,21 +54,34 @@ export function ExportModal({ closeModal }: { closeModal?: () => void }) {
       ) : (
         <>
           <div style={{ fontSize: "13px", marginBottom: "8px" }}>{BACKUP.exportIntro}</div>
-          {/* Read-only: changes are ignored; the copy action still works. */}
-          <TextField label={BACKUP.exportField} value={compact(text)} bShowCopyAction onChange={() => undefined} />
-          <pre
-            style={{
-              fontSize: "11px",
-              whiteSpace: "pre-wrap",
-              wordBreak: "break-all",
-              background: "rgba(0, 0, 0, 0.25)",
-              padding: "8px",
-              borderRadius: "4px",
-              marginTop: "8px",
-            }}
-          >
-            {text}
-          </pre>
+          {/*
+            Read-only: edits are ignored. Not `disabled`, because whether Steam
+            still renders the copy action on a disabled field is unverified.
+          */}
+          <TextField
+            label={BACKUP.exportField}
+            description={BACKUP.exportFieldHint}
+            value={compact(text)}
+            bShowCopyAction
+            onChange={() => undefined}
+          />
+          <div style={{ maxHeight: "40vh", overflowY: "auto", display: "flex", flexDirection: "column", marginTop: "8px" }}>
+            <ScrollPanelGroup>
+              <pre
+                style={{
+                  fontSize: "11px",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-all",
+                  background: "rgba(0, 0, 0, 0.25)",
+                  padding: "8px",
+                  borderRadius: "4px",
+                  margin: 0,
+                }}
+              >
+                {text}
+              </pre>
+            </ScrollPanelGroup>
+          </div>
         </>
       )}
       <DialogFooter>

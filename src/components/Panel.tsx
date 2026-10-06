@@ -2,7 +2,7 @@ import { ButtonItem, PanelSection, PanelSectionRow, showModal } from "@decky/ui"
 import { useState } from "react";
 
 import { useStatus } from "../hooks/useStatus";
-import { useDevices, wakeManual } from "../store";
+import { loadDevices, useDevices, wakeManual } from "../store";
 import { S } from "../strings";
 import { DeviceEditor } from "./DeviceEditor";
 import { DeviceRow } from "./DeviceRow";
@@ -17,6 +17,7 @@ export function Panel() {
   const list = devices ?? [];
   const statuses = useStatus(list.map((d) => d.id));
   const [wakingAll, setWakingAll] = useState(false);
+  const loadedEmpty = devices !== null && devices.length === 0;
   const automationEnabled = list.some((d) => d.auto.length > 0);
 
   const wakeAll = async () => {
@@ -36,7 +37,7 @@ export function Panel() {
           <ButtonItem
             layout="below"
             disabled={list.length === 0}
-            description={list.length === 0 ? S.wakeAllNoDevices : undefined}
+            description={loadedEmpty ? S.wakeAllNoDevices : undefined}
             onClick={() => void wakeAll()}
           >
             {wakingAll ? S.waking : S.wakeAll}
@@ -45,7 +46,9 @@ export function Panel() {
 
         {failed && (
           <PanelSectionRow>
-            <div style={{ fontSize: "13px" }}>{S.loadFailed}</div>
+            <ButtonItem layout="below" description={S.loadFailed} onClick={() => void loadDevices()}>
+              {S.tryAgain}
+            </ButtonItem>
           </PanelSectionRow>
         )}
         {devices === null && !failed && (
@@ -53,7 +56,7 @@ export function Panel() {
             <div style={{ fontSize: "13px" }}>{S.loading}</div>
           </PanelSectionRow>
         )}
-        {devices !== null && devices.length === 0 && (
+        {loadedEmpty && (
           <PanelSectionRow>
             <EmptyState />
           </PanelSectionRow>
@@ -69,9 +72,11 @@ export function Panel() {
             {S.addDevice}
           </ButtonItem>
         </PanelSectionRow>
-        <PanelSectionRow>
-          <LastDispatch automationEnabled={automationEnabled} />
-        </PanelSectionRow>
+        {automationEnabled && (
+          <PanelSectionRow>
+            <LastDispatch />
+          </PanelSectionRow>
+        )}
       </PanelSection>
 
       <PanelSection title={S.backupTitle}>

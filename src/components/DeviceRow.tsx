@@ -8,7 +8,14 @@ import { S } from "../strings";
 import { DeviceEditor } from "./DeviceEditor";
 import { StatusBadge } from "./StatusBadge";
 
-const BUTTON_STYLE = { minWidth: 0, padding: "6px 8px", flex: 1 } as const;
+const BUTTON_STYLE = {
+  minWidth: 0,
+  padding: "6px 8px",
+  flex: 1,
+  whiteSpace: "nowrap",
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+} as const;
 
 function confirmDelete(device: Device) {
   showModal(
@@ -25,6 +32,7 @@ function confirmDelete(device: Device) {
 /** Name + status text, automation summary, then Wake / Edit / Delete (D-pad left/right between them). */
 export function DeviceRow({ device, status }: { device: Device; status: Status | undefined }) {
   const [waking, setWaking] = useState(false);
+  const hasStatusCheck = Boolean(device.host) && device.status_port !== null;
 
   const onWake = async () => {
     if (waking) return;
@@ -39,10 +47,10 @@ export function DeviceRow({ device, status }: { device: Device; status: Status |
   return (
     <div style={{ width: "100%" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
-        <span style={{ fontWeight: "bold", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span title={device.name} style={{ fontWeight: "bold", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {device.name}
         </span>
-        <StatusBadge value={status} />
+        <StatusBadge value={hasStatusCheck ? status : "none"} />
       </div>
       <div style={{ fontSize: "12px", opacity: 0.75, margin: "2px 0 6px" }}>{automationSummary(device.auto)}</div>
       <Focusable flow-children="horizontal" style={{ display: "flex", gap: "6px" }}>

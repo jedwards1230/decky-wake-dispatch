@@ -190,12 +190,15 @@ automatic), including skipped and no-network outcomes for automation.
   `force` (the "Check now" button, also when the setting is off): a request unless the
   last attempt was less than 60 s ago, in which case the cached result comes back with
   `throttled: true`.
-- Update status, first match wins: `disabled` (setting off and not forced this call,
-  even if the installed version is unreadable); `unavailable` (installed version
-  unreadable); `unchecked` (no attempt yet); `unavailable` (the last attempt failed and
-  there is no success younger than 48 h); otherwise the cached release is compared
-  with the installed version on every call -> `available` (newer) or `current`. A failed
-  attempt with a success younger than 48 h reports that success, `error: null`.
+- Update status, first match wins (`unavailable` has two separate causes):
+  1. `disabled`: setting off and not forced this call, even if the installed version
+     is unreadable.
+  2. `unavailable`: the installed version is unreadable.
+  3. `unchecked`: no attempt yet.
+  4. `unavailable`: the last attempt failed and there is no success younger than 48 h.
+  5. Otherwise the cached release is compared with the installed version on every
+     call -> `available` (newer) or `current`. A failed attempt with a success younger
+     than 48 h reports that success, `error: null`.
 - Update files: setting `DECKY_PLUGIN_SETTINGS_DIR/options.json`
   `{ "version": 1, "update_check": bool }` (missing, corrupt or non-bool -> on; other
   keys preserved on write; not part of `export_config`). Cache

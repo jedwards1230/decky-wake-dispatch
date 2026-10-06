@@ -123,7 +123,7 @@ async def test_main_boot_zero_devices_missing_dirs(decky_env, sandbox, tmp_path,
     assert any(m.startswith("Wake Dispatch backend loaded (python 3.") for m in messages)
     assert (
         "Wake Dispatch modules imported: "
-        "log, mac, packet, storage, devices, netinfo, dispatch, automation"
+        "log, mac, packet, storage, devices, netinfo, dispatch, automation, updates"
     ) in messages
     [(event, (record,))] = decky_env.emitted
     assert event == "dispatched"
@@ -228,7 +228,7 @@ def test_every_module_imports_under_plain_python() -> None:
         [sys.executable, "-c", code], cwd=ROOT, capture_output=True, text=True, check=True
     )
     assert out.stdout.strip() == "ok"
-    assert len(wake_dispatch.MODULES) == 8
+    assert len(wake_dispatch.MODULES) == 9
 
 
 async def test_unload_never_yields(decky_env, sandbox, monkeypatch) -> None:

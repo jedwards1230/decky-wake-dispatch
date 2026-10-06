@@ -212,3 +212,21 @@ export const BACKUP = {
   importedReplace: (n: number) => `Replaced your list with ${n === 1 ? "1 device" : `${n} devices`}.`,
   cancel: "Cancel",
 };
+
+export const UPDATE = {
+  title: "Updates",
+  available: (version: string) => `Update available: v${version}`,
+  current: (installed: string) => `Up to date (v${installed})`,
+  checking: "Checking for updates…",
+  unavailable: "Update check unavailable",
+  off: "Update checks are off",
+  installed: (installed: string) => `Installed version v${installed}`,
+  throttled: "Checked less than a minute ago",
+  update: "Update",
+  checkNow: "Check for updates",
+  toggle: "Check daily",
+  toggleHint:
+    "Off by default. When on, asks GitHub for the latest release at most once a day, when you open this panel. Nothing is installed without your confirmation.",
+  manual: "Install from URL: Decky settings → Developer → Install Plugin from URL, then paste:",
+  installFailed: "Couldn't open Decky's installer. Install from the URL below instead.",
+};

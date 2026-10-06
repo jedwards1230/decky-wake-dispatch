@@ -32,9 +32,10 @@ from wake_dispatch import (
     netinfo,
     packet,
     storage,
+    updates,
 )
 
-_IMPORTED = (log, mac, packet, storage, devices, netinfo, dispatch, automation)
+_IMPORTED = (log, mac, packet, storage, devices, netinfo, dispatch, automation, updates)
 
 # (path, sha256 of contents) of settings files already backed up by this process,
 # so a rewrite that keeps failing doesn't add a new backup on every read.
@@ -143,9 +144,20 @@ def _automation_for(plugin: Any) -> automation.Automation:
     return plugin._automation
 
 
+def _updater_for(plugin: Any) -> updates.Updater:
+    if plugin._updater is None:
+        plugin._updater = updates.Updater(
+            settings_dir=_settings_dir,
+            runtime_dir=_runtime_dir,
+            plugin_dir=lambda: decky.DECKY_PLUGIN_DIR,
+        )
+    return plugin._updater
+
+
 class Plugin:
     _dispatcher: dispatch.Dispatcher | None = None
     _automation: automation.Automation | None = None
+    _updater: updates.Updater | None = None
 
     # Zero-argument callables accept and ignore stray positional arguments, and
     # ``wake`` / ``status`` default theirs, so a frontend that passes an extra
@@ -210,6 +222,12 @@ class Plugin:
             return exc.as_result()
         return _save(imported)
 
+    async def update_info(self, force: Any = False, *_args: Any) -> dict[str, Any]:
+        return await _updater_for(self).info(force is True)
+
+    async def set_update_check(self, enabled: Any = None, *_args: Any) -> dict[str, Any]:
+        return updates.set_update_check(_settings_dir(), enabled)
+
     async def _main(self) -> None:
         decky.logger.info("Wake Dispatch backend loaded (python %s)", sys.version.split()[0])
         decky.logger.info(
@@ -234,4 +252,6 @@ class Plugin:
         decky.logger.info("Wake Dispatch backend unloading")
 
     async def _uninstall(self) -> None:
+        # Decky also runs this when updating, before extracting the new version:
+        # never delete settings, state or the update cache here.
         decky.logger.info("Wake Dispatch backend uninstalled")

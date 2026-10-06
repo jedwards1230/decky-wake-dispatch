@@ -25,6 +25,7 @@ _decky = types.ModuleType("decky")
 _decky.DECKY_PLUGIN_SETTINGS_DIR = ""
 _decky.DECKY_PLUGIN_RUNTIME_DIR = ""
 _decky.DECKY_PLUGIN_LOG_DIR = ""
+_decky.DECKY_PLUGIN_DIR = ""
 _decky.logger = logging.getLogger("decky-test")
 _decky.emit = _emit
 _decky.emitted = emitted
@@ -38,6 +39,7 @@ def decky_env(tmp_path: Path) -> Iterator[types.ModuleType]:
         "DECKY_PLUGIN_SETTINGS_DIR": tmp_path / "settings",
         "DECKY_PLUGIN_RUNTIME_DIR": tmp_path / "runtime",
         "DECKY_PLUGIN_LOG_DIR": tmp_path / "logs",
+        "DECKY_PLUGIN_DIR": tmp_path / "plugin",
     }
     for name, path in dirs.items():
         path.mkdir()
@@ -54,7 +56,7 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[st
     procfs/sysfs paths point into ``tmp_path/fake`` (initially empty, i.e. no
     route, no ARP entries, no boot id) and the UDP socket factory is a recorder.
     """
-    from wake_dispatch import netinfo, packet
+    from wake_dispatch import netinfo, packet, updates
 
     fake = tmp_path / "fake"
     (fake / "sys-net").mkdir(parents=True)
@@ -73,6 +75,11 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[st
     monkeypatch.setattr(netinfo, "_lookup_queue", None)
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(packet, "make_socket", lambda: FakeSocket(sent))
+
+    def no_real_fetch(url: str, *_args: Any) -> Any:
+        raise AssertionError(f"test made a real update check request to {url!r}")
+
+    monkeypatch.setattr(updates, "https_fetch", no_real_fetch)
     yield {"fake": fake, "sent": sent}
     netinfo.shutdown_resolver()
 

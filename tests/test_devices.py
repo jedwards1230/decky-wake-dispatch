@@ -263,3 +263,135 @@ def test_import_invalid_device_reports_import_index() -> None:
         devices.import_devices(text, "merge", [])
     assert (err.value.field, err.value.index) == ("mac", 1)
     assert err.value.message == "Device 2: Enter a MAC address."
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("[" * 100000, "nested too deeply"),
+        ("[" + "1" * 5000 + "]", "number that is too long"),
+        ("[" + " " * devices.IMPORT_MAX_BYTES + "]", "too large to import"),
+        ('["' + "é" * (devices.IMPORT_MAX_BYTES // 2) + '"]', "too large to import"),
+    ],
+    ids=["deeply-nested", "huge-int", "over-cap", "over-cap-in-bytes"],
+)
+def test_import_rejects_unreadable_or_oversized_text(text, message) -> None:
+    with pytest.raises(ConfigError) as err:
+        devices.import_devices(text, "replace", [])
+    assert message in str(err.value)
+
+
+def _many(count: int) -> list[dict]:
+    return [
+        device(i % 250 + 1, id=f"pc-{i}", mac=f"aa:bb:cc:dd:{i // 256:02x}:{i % 256:02x}")
+        for i in range(count)
+    ]
+
+
+def test_device_cap_on_save_and_import() -> None:
+    assert len(devices.validate_devices(_many(devices.MAX_DEVICES))) == devices.MAX_DEVICES
+    with pytest.raises(DeviceError) as err:
+        devices.validate_devices(_many(devices.MAX_DEVICES + 1))
+    assert err.value.message == "You can save at most 64 devices."
+    with pytest.raises(ConfigError, match="65 devices; the limit is 64"):
+        devices.import_devices(json.dumps(_many(65)), "replace", [])
+    existing = devices.validate_devices(_many(60))
+    incoming = [device(1, id=f"new-{i}", mac=f"aa:bb:cc:dd:ff:{i:02x}") for i in range(5)]
+    with pytest.raises(ConfigError, match="Merging would give 65 devices"):
+        devices.import_devices(json.dumps(incoming), "merge", existing)
+
+
+def test_stored_devices_over_cap_keep_first_and_count_dropped() -> None:
+    kept, dropped = devices.sanitise_stored(_many(70))
+    assert [d["id"] for d in kept] == [f"pc-{i}" for i in range(64)]
+    assert dropped == 6
+
+
+@pytest.mark.parametrize("bad_id", ["pc,1", "pc 1", "x" * 129, "pc/1", "pc;1", "ü-pc", "pc​1"])
+def test_bad_ids_rejected(bad_id) -> None:
+    with pytest.raises(DeviceError) as err:
+        devices.validate_devices([device(1, id=bad_id)])
+    assert err.value.field == "id"
+
+
+def test_good_ids_and_generated_ids_match_pattern() -> None:
+    for good in ("pc-1", "A.b_C-9", "x" * 128):
+        assert devices.validate_devices([device(1, id=good)])[0]["id"] == good
+    for name in ("Gaming PC", "!!!", "Ünïcödé PC", "x" * 200):
+        [d] = devices.validate_devices([device(1, id="", name=name[:64])])
+        assert devices.ID_PATTERN.fullmatch(d["id"])
+
+
+def test_stored_device_with_bad_id_gets_a_new_one() -> None:
+    kept, dropped = devices.sanitise_stored([device(1, id="has, comma")])
+    assert dropped == 0
+    assert devices.ID_PATTERN.fullmatch(kept[0]["id"]) and kept[0]["id"] != "has, comma"
+
+
+@pytest.mark.parametrize(
+    ("raw", "clean"),
+    [
+        ("  Gaming   PC ", "Gaming PC"),
+        ("Gaming‮PC", "GamingPC"),  # bidi override
+        ("Gam​ing‍ PC﻿", "Gaming PC"),  # zero-width characters
+        ("Tab\tand\nnewline", "Tab and newline"),
+        ("Café", "Café"),  # NFC
+        ("\x00\x07Bell", "Bell"),
+        ("​‮", ""),
+        (None, ""),
+    ],
+)
+def test_sanitise_name(raw, clean) -> None:
+    assert devices.sanitise_name(raw) == clean
+
+
+def test_sanitise_name_caps_length() -> None:
+    assert devices.sanitise_name("a" * 100) == "a" * devices.NAME_MAX
+    assert devices.sanitise_name("ab cd", max_len=3) == "ab"
+
+
+def test_names_are_sanitised_on_save() -> None:
+    [d] = devices.validate_devices([device(1, name="‮Office​  PC")])
+    assert d["name"] == "Office PC"
+    with pytest.raises(DeviceError) as err:
+        devices.validate_devices([device(1, name="​‮")])
+    assert err.value.field == "name"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "192.0.2.1",
+        "2001:db8::1",
+        "pc",
+        "office-pc.example",
+        "office-pc.example.",
+        "a" * 63 + ".example",
+        "1pc.example",
+    ],
+)
+def test_good_hosts(host) -> None:
+    assert devices.validate_devices([device(1, host=host)])[0]["host"] == host
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "pc example",
+        "-pc.example",
+        "pc-.example",
+        "pc..example",
+        "a" * 64 + ".example",
+        ("a" * 60 + ".") * 5,
+        "pc_1.example",
+        "http://pc",
+        "pc:22",
+        "fe80::1%eth0",
+        "pc​.example",
+        ".",
+    ],
+)
+def test_bad_hosts(host) -> None:
+    with pytest.raises(DeviceError) as err:
+        devices.validate_devices([device(1, host=host)])
+    assert err.value.field == "host"

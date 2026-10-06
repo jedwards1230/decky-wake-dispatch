@@ -142,12 +142,20 @@ class Automation:
             get_logger().exception("Wake Dispatch %s task failed", what)
             return None
 
-    async def stop(self) -> None:
-        """Cancel and await every background task, swallowing the cancellations."""
+    def cancel(self) -> list[asyncio.Task[Any]]:
+        """Cancel every background task and forget them, without awaiting anything.
+
+        ``Plugin._unload`` calls this: it must finish without yielding to the
+        event loop (see AGENTS.md). Returns the cancelled tasks.
+        """
         tasks = [t for t in (self.boot_task, self.watch_task, *self._resume_tasks) if t]
         for task in tasks:
             task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
         self.boot_task = None
         self.watch_task = None
         self._resume_tasks.clear()
+        return tasks
+
+    async def stop(self) -> None:
+        """``cancel`` and then await the cancelled tasks, swallowing the cancellations."""
+        await asyncio.gather(*self.cancel(), return_exceptions=True)

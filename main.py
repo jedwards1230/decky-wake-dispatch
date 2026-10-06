@@ -16,6 +16,7 @@ both work. Plugin directories are resolved at call time, never at import.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from typing import Any
@@ -35,6 +36,10 @@ from wake_dispatch import (
 
 _IMPORTED = (log, mac, packet, storage, devices, netinfo, dispatch, automation)
 
+# (path, sha256 of contents) of settings files already backed up by this process,
+# so a rewrite that keeps failing doesn't add a new backup on every read.
+_backed_up: set[tuple[str, str]] = set()
+
 
 def _settings_dir() -> str:
     return decky.DECKY_PLUGIN_SETTINGS_DIR
@@ -49,7 +54,8 @@ def _load_devices() -> list[dict[str, Any]]:
 
     Rewriting keeps generated ids stable between reads and upgrades old-format
     files once. If a stored device had to be dropped, the original file is first
-    copied to ``devices.json.bak-<ts>`` so nothing is silently lost. A file from a
+    copied to ``devices.json.bak-<ts>`` so nothing is silently lost (once per
+    distinct file content, even if the rewrite keeps failing). A file from a
     newer build (already backed up on read) is only rewritten when ids had to be
     assigned.
     """
@@ -63,12 +69,33 @@ def _load_devices() -> list[dict[str, Any]]:
     if changed:
         path = storage.settings_path(_settings_dir())
         if dropped:
-            storage.backup_file(path, "bak")
+            _backup_once(path)
         try:
             storage.save_settings(_settings_dir(), cleaned)
         except OSError as exc:
             decky.logger.error("Could not rewrite the device list: %s", exc)
     return cleaned
+
+
+def _backup_once(path: str) -> None:
+    try:
+        with open(path, "rb") as handle:
+            key = (path, hashlib.sha256(handle.read()).hexdigest())
+    except OSError:
+        key = None
+    if key is not None and key in _backed_up:
+        return
+    if storage.backup_file(path, "bak") is not None and key is not None:
+        _backed_up.add(key)
+
+
+def _ids_arg(ids: Any) -> tuple[bool, list[str] | None]:
+    """``(True, ids)`` for ``None`` or a list of strings, else ``(False, None)``."""
+    if ids is None:
+        return True, None
+    if isinstance(ids, list) and all(isinstance(i, str) for i in ids):
+        return True, ids
+    return False, None
 
 
 def _load_state() -> dict[str, Any]:
@@ -120,7 +147,11 @@ class Plugin:
     _dispatcher: dispatch.Dispatcher | None = None
     _automation: automation.Automation | None = None
 
-    async def list_devices(self) -> list[dict[str, Any]]:
+    # Zero-argument callables accept and ignore stray positional arguments, and
+    # ``wake`` / ``status`` default theirs, so a frontend that passes an extra
+    # value (or none) gets an answer instead of a TypeError (docs/CONTRACT.md).
+
+    async def list_devices(self, *_args: Any) -> list[dict[str, Any]]:
         return _load_devices()
 
     async def save_devices(self, devices_in: list[dict[str, Any]]) -> dict[str, Any]:
@@ -136,22 +167,39 @@ class Plugin:
         except mac.MacError as exc:
             return {"ok": False, "error": str(exc)}
 
-    async def wake(self, ids: list[str] | None, trigger: str) -> dict[str, Any]:
-        return await _dispatcher_for(self).dispatch(trigger, ids)
+    async def wake(
+        self, ids: list[str] | None = None, trigger: str = "manual", *_args: Any
+    ) -> dict[str, Any]:
+        dispatcher = _dispatcher_for(self)
+        ok, wanted = _ids_arg(ids)
+        error = None
+        if not ok:
+            error = "Device ids must be a list of text ids, or null for all devices."
+        elif trigger not in dispatch.TRIGGERS:
+            error = f"Unknown trigger {trigger!r}; expected one of {', '.join(dispatch.TRIGGERS)}."
+        if error is not None:
+            decky.logger.error("wake called with bad arguments: %s", error)
+            label = trigger if isinstance(trigger, str) else "manual"
+            return {**dispatcher.record(label, "failed", error), "ok": False, "error": error}
+        return await dispatcher.dispatch(trigger, wanted)
 
-    async def status(self, ids: list[str] | None) -> dict[str, str]:
-        return await netinfo.status_map(_load_devices(), ids)
+    async def status(self, ids: list[str] | None = None, *_args: Any) -> dict[str, str]:
+        ok, wanted = _ids_arg(ids)
+        if not ok:
+            decky.logger.error("status called with bad ids: %r", type(ids).__name__)
+            return {}
+        return await netinfo.status_map(_load_devices(), wanted)
 
-    async def get_state(self) -> dict[str, Any]:
+    async def get_state(self, *_args: Any) -> dict[str, Any]:
         return _public_state(_load_state())
 
-    async def current_network(self) -> dict[str, str] | None:
+    async def current_network(self, *_args: Any) -> dict[str, str] | None:
         return netinfo.default_route()
 
-    async def neighbours(self) -> list[dict[str, Any]]:
+    async def neighbours(self, *_args: Any) -> list[dict[str, Any]]:
         return await netinfo.neighbours()
 
-    async def export_config(self) -> str:
+    async def export_config(self, *_args: Any) -> str:
         return devices.export_json(_load_devices())
 
     async def import_config(self, text: str, mode: str) -> dict[str, Any]:
@@ -177,8 +225,11 @@ class Plugin:
         _automation_for(self).start()
 
     async def _unload(self) -> None:
+        # Never await here (AGENTS.md): Decky 3.2's socket listener can spin
+        # the loop once the loader hangs up, so a yield may never resume and
+        # Decky SIGKILLs the process after 5 s.
         if self._automation is not None:
-            await self._automation.stop()
+            self._automation.cancel()
         netinfo.shutdown_resolver()
         decky.logger.info("Wake Dispatch backend unloading")
 

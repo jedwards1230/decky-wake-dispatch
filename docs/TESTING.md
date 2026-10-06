@@ -31,21 +31,45 @@ path the same way Decky does.
 - `test_mac_packet.py`: MAC and SecureOn normalisation, magic packet bytes (102 / 108),
   socket options.
 - `test_storage.py`: atomic writes, migration of old settings shapes, corrupt-file
-  quarantine, files from a newer schema.
-- `test_devices.py`: device validation, id generation, export, import merge and replace.
-- `test_netinfo.py`: route and ARP parsing, interface state, reverse lookups, status
-  checks.
+  quarantine (including JSON nested too deeply and over-long numbers), files from a
+  newer schema.
+- `test_devices.py`: device validation (id alphabet, name cleaning of bidi and
+  zero-width characters and NFC, host syntax), id generation, the 64-device and
+  256 KiB import limits, export, import merge and replace.
+- `test_netinfo.py`: route and ARP parsing, interface state, the daemon-thread name
+  lookups (timeouts, the in-flight bound, late answers, shutdown, a subprocess whose
+  lookup hangs still exits at once), and the status mapping (refused -> awake, no route
+  or slow lookup -> unknown, timeout -> asleep, connecting to the numeric address).
 - `test_dispatch.py`: device selection, the home-gateway gate, bursts, outcomes and
   reasons, per-device error isolation.
 - `test_automation.py`: the boot gate and the resume watcher, driven by injected clocks
-  and sleeps.
+  and sleeps, and the synchronous `cancel`.
 - `test_plugin.py`: end to end through `main.Plugin` with fake network files, including
-  a guard that the interpreter is Python 3.11 and an import of every module under plain
-  Python the way Decky loads them.
+  a guard that the interpreter is Python 3.11, an import of every module under plain
+  Python the way Decky loads them, callables given stray or wrong-typed arguments,
+  backing up a dropped device only once, and `_unload` finishing without suspending
+  (`coro.send(None)` must raise `StopIteration` while automation tasks are pending).
 - `test_smoke.py`: every callable in [CONTRACT.md](CONTRACT.md) exists on `Plugin` and is
   async.
 
 Run one file or test with `pytest -q tests/test_dispatch.py -k gateway`.
+
+## Unload under Decky
+
+`_unload` and process exit can't be fully proven inside pytest, because the failure
+depends on how Decky's sandboxed plugin process shuts down: the loader sends SIGTERM
+and closes the plugin's socket, after which Decky 3.2's socket listener can spin the
+event loop, and Decky SIGKILLs the process if it is still alive 5 s later. To check a
+change to shutdown, lookups or background tasks, use a small throwaway script (not part
+of the repo) that mimics that runner: in a child `multiprocessing.Process`, import
+`main.py` with a stub `decky` module, run `Plugin._main()` on a fresh event loop with
+SIGTERM wired to "await `_unload()`, stop the loop, `sys.exit(0)`", and serve a copy of
+the loader's Unix-socket listener. The parent connects to the socket, calls
+`terminate()`, closes the socket and checks that the child exits with code 0 well
+inside 5 s. Repeat with `socket.gethostbyaddr` and `socket.getaddrinfo` patched to
+sleep for 30 s and `neighbours` / `status` called just before the stop. On a device,
+restart `plugin_loader` and check that its journal shows "Wake Dispatch backend
+unloading" and no kill of the plugin process.
 
 ## Frontend
 

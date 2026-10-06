@@ -47,6 +47,19 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
 - **`Plugin` keeps state on class attributes, created lazily.** Legacy loaders call the
   methods with the class itself as `self`, and Decky's directory constants are only
   valid at call time. Don't add `__init__` state or read `decky.DECKY_PLUGIN_*` at import.
+- **`_unload` must never await.** Once Decky 3.2 closes the plugin's socket, its
+  listener inside our process can busy-spin the event loop at EOF; a coroutine that
+  yields during `_unload` may never be resumed, and Decky SIGKILLs the process after
+  5 s. `_unload` only calls synchronous code (`Automation.cancel()`,
+  `netinfo.shutdown_resolver()`) and logs. `tests/test_plugin.py` checks it with
+  `coro.send(None)`.
+- **No `ThreadPoolExecutor`, including the loop's default executor.** At interpreter
+  exit `concurrent.futures` joins every executor worker, even after
+  `shutdown(wait=False)`, so one hung DNS lookup keeps the process alive until it is
+  killed. Blocking lookups go through `netinfo`'s daemon-thread helpers
+  (`resolve_host`, `reverse_lookup`); never call `run_in_executor`, `asyncio.to_thread`
+  or `loop.getaddrinfo`, and pass `asyncio.open_connection` a numeric address so it
+  skips `getaddrinfo`.
 - **Adding a backend module touches three places**: `wake_dispatch.MODULES`, `_IMPORTED`
   in `main.py`, and the module count asserted in `tests/test_plugin.py`.
 - **`pytest` fails on anything but Python 3.11 by design** (`test_python_version_guard`).

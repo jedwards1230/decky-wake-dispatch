@@ -213,3 +213,24 @@ async def test_stop_cancels_in_flight_resume_tasks() -> None:
     assert resume.cancelled()
     assert not auto._resume_tasks
     assert rec.events == []
+
+
+async def test_cancel_never_yields_and_forgets_tasks() -> None:
+    rec = Recorder([device(1, auto=["boot", "resume"])])
+    gate = asyncio.Event()
+    auto = build(rec)
+
+    async def never(_timeout):
+        await gate.wait()
+
+    auto.dispatcher._wait_for_network = never
+    auto.start()
+    resume = auto._fire_resume(60)
+    await asyncio.sleep(0)
+    boot, watch = auto.boot_task, auto.watch_task
+    cancelled = auto.cancel()  # plain call: nothing to await
+    assert set(cancelled) == {boot, watch, resume}
+    assert auto.boot_task is None and auto.watch_task is None and not auto._resume_tasks
+    await asyncio.gather(*cancelled, return_exceptions=True)
+    assert boot.cancelled() and watch.cancelled() and resume.cancelled()
+    assert auto.cancel() == []

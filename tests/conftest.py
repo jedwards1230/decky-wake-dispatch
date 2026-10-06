@@ -61,6 +61,9 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[st
     monkeypatch.setattr(netinfo, "PROC_ARP", str(fake / "arp"))
     monkeypatch.setattr(netinfo, "SYS_CLASS_NET", str(fake / "sys-net"))
     monkeypatch.setattr(netinfo, "BOOT_ID_PATH", str(fake / "boot_id"))
+    # shutdown_resolver() (run after every test, and by Plugin._unload) closes the
+    # resolver for good; monkeypatch restores it to open for the next test.
+    monkeypatch.setattr(netinfo, "_resolver_closed", False)
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(packet, "make_socket", lambda: FakeSocket(sent))
     yield {"fake": fake, "sent": sent}

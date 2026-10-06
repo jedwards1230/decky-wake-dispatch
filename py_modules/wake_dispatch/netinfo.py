@@ -1,22 +1,33 @@
-"""Network facts read from procfs/sysfs, plus the TCP status check.
+"""Network facts read from procfs/sysfs, name lookups, and the TCP status check.
 
 Every path is a module-level constant read at call time (and every function
 also accepts an explicit path / reader), so tests never touch the real
 ``/proc`` or ``/sys``.
+
+Blocking name lookups (``getaddrinfo``, ``gethostbyaddr``) never run on a
+``ThreadPoolExecutor``, not even the loop's default one: at interpreter exit
+``concurrent.futures`` joins every executor worker, so one hung lookup would
+keep the process alive until Decky kills it. Each lookup gets its own daemon
+thread instead (bounded by ``LOOKUP_THREADS``), and the status check resolves
+the host itself and connects to the numeric address so asyncio never calls
+``getaddrinfo`` on its default executor.
 """
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
+import ipaddress
 import os
 import socket
 import struct
+import threading
 import time
 from collections.abc import Awaitable, Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
+from wake_dispatch.devices import HOST_MAX, sanitise_name
 from wake_dispatch.log import get_logger
 from wake_dispatch.mac import MacError, normalise_mac
 
@@ -36,17 +47,29 @@ ZERO_MAC = "00:00:00:00:00:00"
 # and an unreadable file all count as not up.
 UP_STATES = frozenset({"up", "unknown"})
 
-STATUS_TIMEOUT = 1.0
+STATUS_TIMEOUT = 1.0  # TCP connect, per device
+STATUS_LOOKUP_TIMEOUT = 1.0  # resolving a status host name, per device
 REVERSE_DNS_TIMEOUT = 0.5
 NETWORK_POLL_INTERVAL = 1.0
 
-# Reverse lookups run on their own small pool so a slow resolver can't fill the
-# loop's default executor, which asyncio.open_connection needs for getaddrinfo.
-RDNS_WORKERS = 4
+# At most this many lookup threads at once; a lookup that finds no free slot
+# fails fast (-> None) instead of queueing behind stuck ones.
+LOOKUP_THREADS = 8
 HOSTNAME_TTL = 300.0  # seconds to remember a resolved name
 MISS_TTL = 60.0  # seconds to remember that an address has no name
-_rdns_pool: ThreadPoolExecutor | None = None
+ADDRESS_TTL = 30.0  # seconds to remember a status host's address
+ADDRESS_MISS_TTL = 10.0  # seconds to remember that a status host doesn't resolve
+
+# Connect errors that mean "this device has no route there", not "the PC is off".
+NO_ROUTE_ERRNOS = frozenset(
+    {errno.ENETUNREACH, errno.ENETDOWN, errno.EADDRNOTAVAIL, errno.EHOSTUNREACH}
+)
+
+_lookup_slots = threading.BoundedSemaphore(LOOKUP_THREADS)
+_resolver_closed = False
 _hostname_cache: dict[str, tuple[str | None, float]] = {}
+_address_cache: dict[str, tuple[str | None, float]] = {}
+_now: Callable[[], float] = time.monotonic  # clock for the address cache
 
 Reader = Callable[[str], "str | None"]
 
@@ -171,20 +194,117 @@ def parse_arp(text: str) -> list[dict[str, str]]:
     return entries
 
 
-def _rdns_executor() -> ThreadPoolExecutor:
-    global _rdns_pool
-    if _rdns_pool is None:
-        _rdns_pool = ThreadPoolExecutor(max_workers=RDNS_WORKERS, thread_name_prefix="wd-rdns")
-    return _rdns_pool
+_OK, _FAILED, _TIMED_OUT = "ok", "failed", "timed out"
+
+
+async def _lookup_in_thread(
+    func: Callable[[str], Any], arg: str, timeout: float
+) -> tuple[str, Any]:
+    """Run blocking ``func(arg)`` on a daemon thread; return ``(outcome, value)``.
+
+    ``outcome`` is ``_OK`` (value = the result), ``_FAILED`` (value = the
+    exception) or ``_TIMED_OUT`` (also used when the resolver is shut down or
+    every lookup slot is taken). The result comes back through
+    ``loop.call_soon_threadsafe``; a thread that finishes after the caller gave
+    up, or after the loop closed, just drops it. A stuck thread never blocks the
+    loop or interpreter exit (it's a daemon), it only holds its slot.
+    """
+    if _resolver_closed:
+        return _TIMED_OUT, None
+    slots = _lookup_slots
+    if not slots.acquire(blocking=False):
+        get_logger().warning("Too many name lookups in flight; skipping %s", arg)
+        return _TIMED_OUT, None
+    loop = asyncio.get_running_loop()
+    future: asyncio.Future[tuple[str, Any]] = loop.create_future()
+
+    def deliver(outcome: tuple[str, Any]) -> None:
+        if not future.done():
+            future.set_result(outcome)
+
+    def work() -> None:
+        try:
+            try:
+                outcome: tuple[str, Any] = (_OK, func(arg))
+            except Exception as exc:
+                outcome = (_FAILED, exc)
+            with contextlib.suppress(RuntimeError):  # the loop is closed
+                loop.call_soon_threadsafe(deliver, outcome)
+        finally:
+            slots.release()
+
+    thread = threading.Thread(target=work, name="wd-lookup", daemon=True)
+    try:
+        thread.start()
+    except RuntimeError:  # can't start a thread (interpreter shutting down, limits)
+        slots.release()
+        return _TIMED_OUT, None
+    try:
+        async with asyncio.timeout(timeout):
+            return await future
+    except TimeoutError:
+        return _TIMED_OUT, None
 
 
 def shutdown_resolver() -> None:
-    """Stop the reverse-lookup pool without waiting for stuck lookups; forget cached names."""
-    global _rdns_pool
-    pool, _rdns_pool = _rdns_pool, None
-    if pool is not None:
-        pool.shutdown(wait=False, cancel_futures=True)
+    """Forget cached names and make every later lookup return ``None`` at once.
+
+    Synchronous on purpose (``Plugin._unload`` must not await). Lookup threads
+    still running are daemons and are abandoned, never joined.
+    """
+    global _resolver_closed
+    _resolver_closed = True
     _hostname_cache.clear()
+    _address_cache.clear()
+
+
+def _ip_literal(value: str) -> str | None:
+    """``value`` normalised if it is an IPv4 or unscoped IPv6 literal, else ``None``."""
+    if "%" in value:
+        return None
+    try:
+        return str(ipaddress.ip_address(value))
+    except ValueError:
+        return None
+
+
+def _first_ipv4(host: str) -> str:
+    """Blocking: the first IPv4 address ``host`` resolves to (raises ``OSError`` if none)."""
+    infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+    for _family, _type, _proto, _canon, sockaddr in infos:
+        return sockaddr[0]
+    raise socket.gaierror(socket.EAI_NONAME, "No IPv4 address")
+
+
+async def resolve_host(
+    host: str,
+    timeout: float | None = None,
+    resolver: Callable[[str], str] | None = None,
+) -> str | None:
+    """Resolve a status host to a numeric address; any failure or timeout -> ``None``.
+
+    An IP literal is returned as-is without a lookup. A name is resolved on a
+    daemon thread (``resolver`` defaults to the first IPv4 ``getaddrinfo``
+    answer) and the answer is cached briefly; a timeout is not cached.
+    """
+    if not isinstance(host, str) or not host:
+        return None
+    literal = _ip_literal(host)
+    if literal is not None:
+        return literal
+    cached = _address_cache.get(host)
+    if cached is not None and cached[1] > _now():
+        return cached[0]
+    outcome, value = await _lookup_in_thread(
+        resolver or _first_ipv4, host, STATUS_LOOKUP_TIMEOUT if timeout is None else timeout
+    )
+    if outcome == _TIMED_OUT:
+        return None
+    address = _ip_literal(value) if outcome == _OK and isinstance(value, str) else None
+    if address is not None and ipaddress.ip_address(address).version != 4:
+        address = None
+    _address_cache[host] = (address, _now() + (ADDRESS_TTL if address else ADDRESS_MISS_TTL))
+    return address
 
 
 async def reverse_lookup(
@@ -193,29 +313,27 @@ async def reverse_lookup(
     resolver: Callable[[str], Any] | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> str | None:
-    """Reverse-resolve ``ip`` on the dedicated pool; any failure or timeout -> ``None``.
+    """Reverse-resolve ``ip`` on a daemon thread; any failure or timeout -> ``None``.
 
-    Answers (including "no name") are cached for a few minutes; a timeout is not
-    cached. On timeout the pool thread may linger until the OS resolver gives up
-    (lookups still queued are cancelled); the event loop is never blocked.
+    The name is cleaned with ``sanitise_name``. Answers (including "no name")
+    are cached for a few minutes; a timeout is not cached. A timed-out thread
+    may linger until the OS resolver gives up; the event loop is never blocked.
     """
     cached = _hostname_cache.get(ip)
     if cached is not None and cached[1] > clock():
         return cached[0]
-    resolve = resolver or socket.gethostbyaddr
-    loop = asyncio.get_running_loop()
-    try:
-        result = await asyncio.wait_for(
-            loop.run_in_executor(_rdns_executor(), resolve, ip),
-            REVERSE_DNS_TIMEOUT if timeout is None else timeout,
-        )
-    except TimeoutError:
+    outcome, result = await _lookup_in_thread(
+        resolver or socket.gethostbyaddr,
+        ip,
+        REVERSE_DNS_TIMEOUT if timeout is None else timeout,
+    )
+    if outcome == _TIMED_OUT:
         return None
-    except (OSError, ValueError, UnicodeError):
-        _hostname_cache[ip] = (None, clock() + MISS_TTL)
-        return None
-    name = result[0] if isinstance(result, tuple) else result
-    name = name if isinstance(name, str) and name else None
+    name = None
+    if outcome == _OK:
+        raw = result[0] if isinstance(result, tuple) and result else result
+        name = sanitise_name(raw, max_len=HOST_MAX) if isinstance(raw, str) else None
+    name = name or None
     _hostname_cache[ip] = (name, clock() + (HOSTNAME_TTL if name else MISS_TTL))
     return name
 
@@ -245,21 +363,33 @@ async def check_status(
     port: int | None,
     timeout: float | None = None,
     opener: Opener | None = None,
+    resolver: Callable[[str], str] | None = None,
 ) -> str:
-    """TCP-connect to ``host:port``: connected -> "awake"; refused/timeout -> "asleep".
+    """Resolve ``host`` (see ``resolve_host``), then TCP-connect to the numeric address.
 
-    No host or port, or a name that doesn't resolve -> "unknown".
+    - connected, or refused (the PC's TCP stack answered) -> "awake"
+    - connect timed out -> "asleep"
+    - no host or port, a name that doesn't resolve in time, or no route to it
+      (ENETUNREACH, ENETDOWN, EADDRNOTAVAIL, EHOSTUNREACH) -> "unknown"
+    - any other connect error -> "asleep"
     """
     if not host or not port:
+        return "unknown"
+    address = await resolve_host(host, resolver=resolver)
+    if address is None:
         return "unknown"
     open_connection = opener or asyncio.open_connection
     try:
         async with asyncio.timeout(STATUS_TIMEOUT if timeout is None else timeout):
-            _reader, writer = await open_connection(host, port)
+            _reader, writer = await open_connection(address, port)
+    except TimeoutError:
+        return "asleep"
+    except ConnectionRefusedError:
+        return "awake"
     except socket.gaierror:
         return "unknown"
-    except (TimeoutError, OSError):
-        return "asleep"
+    except OSError as exc:
+        return "unknown" if exc.errno in NO_ROUTE_ERRNOS else "asleep"
     except (ValueError, UnicodeError):
         return "unknown"
     writer.close()
@@ -274,13 +404,20 @@ async def status_map(
     ids: list[str] | None,
     timeout: float | None = None,
     opener: Opener | None = None,
+    resolver: Callable[[str], str] | None = None,
 ) -> dict[str, str]:
     """Check every selected device concurrently; unknown ids are ignored."""
     wanted = None if ids is None else set(ids)
     selected = [d for d in devices if wanted is None or d["id"] in wanted]
     results = await asyncio.gather(
         *(
-            check_status(d.get("host"), d.get("status_port"), timeout=timeout, opener=opener)
+            check_status(
+                d.get("host"),
+                d.get("status_port"),
+                timeout=timeout,
+                opener=opener,
+                resolver=resolver,
+            )
             for d in selected
         ),
         return_exceptions=True,

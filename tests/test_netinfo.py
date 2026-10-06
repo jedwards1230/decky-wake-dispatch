@@ -1,12 +1,19 @@
 import asyncio
+import errno
 import socket
+import subprocess
+import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import pytest
 from helpers import HOME_ROUTE, ROUTE_HEADER, route_line, write_network
 
 from wake_dispatch import netinfo
+
+PY_MODULES = Path(__file__).resolve().parent.parent / "py_modules"
 
 
 def test_parse_routes_keeps_default_gateways_only() -> None:
@@ -174,23 +181,28 @@ async def test_reverse_dns_timeout_does_not_block_loop() -> None:
     assert "192.0.2.0" not in netinfo._hostname_cache  # timeouts aren't cached
 
 
-async def test_reverse_dns_uses_dedicated_pool_not_default_executor() -> None:
+async def test_lookups_use_daemon_threads_not_an_executor() -> None:
     class NoDefault(ThreadPoolExecutor):
         def submit(self, *args, **kwargs):
             raise AssertionError("default executor used")
 
     loop = asyncio.get_running_loop()
-    default = NoDefault(max_workers=1)
-    loop.set_default_executor(default)
-    threads: list[str] = []
+    loop.set_default_executor(NoDefault(max_workers=1))
+    seen: list[threading.Thread] = []
 
     def resolver(ip: str):
-        threads.append(threading.current_thread().name)
+        seen.append(threading.current_thread())
         return ("pc.example", [], [ip])
 
+    def forward(host: str) -> str:
+        seen.append(threading.current_thread())
+        return "192.0.2.9"
+
     assert await netinfo.reverse_lookup("192.0.2.9", 1.0, resolver) == "pc.example"
-    assert threads and threads[0].startswith("wd-rdns")
-    assert netinfo._rdns_pool is not None and netinfo._rdns_pool._max_workers == 4
+    assert await netinfo.resolve_host("pc.example", 1.0, forward) == "192.0.2.9"
+    assert len(seen) == 2
+    assert all(t.daemon and t.name == "wd-lookup" for t in seen)
+    assert not hasattr(netinfo, "ThreadPoolExecutor")
 
 
 async def test_reverse_dns_cache() -> None:
@@ -209,11 +221,20 @@ async def test_reverse_dns_cache() -> None:
     assert calls == ["192.0.2.5"] * 2
 
 
-def test_shutdown_resolver_is_idempotent() -> None:
-    netinfo._rdns_executor()
+async def test_shutdown_resolver_is_idempotent_and_closes_lookups() -> None:
+    calls: list[str] = []
+
+    def resolver(ip: str):
+        calls.append(ip)
+        return ("pc.example", [], [ip])
+
+    assert await netinfo.reverse_lookup("192.0.2.5", 1.0, resolver) == "pc.example"
     netinfo.shutdown_resolver()
     netinfo.shutdown_resolver()
-    assert netinfo._rdns_pool is None
+    assert netinfo._hostname_cache == {}
+    assert await netinfo.reverse_lookup("192.0.2.5", 1.0, resolver) is None
+    assert await netinfo.resolve_host("pc.example", 1.0, lambda _h: "192.0.2.5") is None
+    assert calls == ["192.0.2.5"]  # nothing ran after shutdown
 
 
 async def test_real_dns_guard_is_active() -> None:
@@ -245,7 +266,7 @@ async def test_status_awake_asleep_unknown() -> None:
 
     async def opener(host, port):
         if port == 1:
-            raise ConnectionRefusedError(111, "Connection refused")
+            raise TimeoutError
         return await asyncio.open_connection(host, port)
 
     try:
@@ -293,11 +314,172 @@ async def test_status_checks_run_concurrently_and_close_writers() -> None:
 
 
 async def test_status_lookup_failure_and_timeout() -> None:
-    async def gai(_h, _p):
+    def gai(_h):
         raise socket.gaierror(-2, "Name or service not known")
+
+    async def opener(_h, _p):
+        raise AssertionError("no connect without an address")
 
     async def hang(_h, _p):
         await asyncio.sleep(10)
 
-    assert await netinfo.check_status("pc.invalid", 22, opener=gai) == "unknown"
+    assert await netinfo.check_status("pc.invalid", 22, opener=opener, resolver=gai) == "unknown"
     assert await netinfo.check_status("192.0.2.1", 22, timeout=0.01, opener=hang) == "asleep"
+
+
+def _raiser(exc: BaseException):
+    async def opener(_h, _p):
+        raise exc
+
+    return opener
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (ConnectionRefusedError(errno.ECONNREFUSED, "Connection refused"), "awake"),
+        (OSError(errno.ENETUNREACH, "Network is unreachable"), "unknown"),
+        (OSError(errno.EHOSTUNREACH, "No route to host"), "unknown"),
+        (OSError(errno.ENETDOWN, "Network is down"), "unknown"),
+        (OSError(errno.EADDRNOTAVAIL, "Cannot assign requested address"), "unknown"),
+        (TimeoutError(), "asleep"),
+        (OSError(errno.ECONNRESET, "Connection reset"), "asleep"),
+    ],
+)
+async def test_status_connect_error_mapping(exc, expected) -> None:
+    assert await netinfo.check_status("192.0.2.1", 22, opener=_raiser(exc)) == expected
+
+
+async def test_status_slow_lookup_is_unknown_not_asleep(monkeypatch) -> None:
+    release = threading.Event()
+    monkeypatch.setattr(netinfo, "STATUS_LOOKUP_TIMEOUT", 0.05)
+
+    def slow(_h: str) -> str:
+        release.wait(5)
+        return "192.0.2.1"
+
+    async def opener(_h, _p):
+        raise AssertionError("no connect after a slow lookup")
+
+    try:
+        result = await netinfo.check_status("pc.example", 22, opener=opener, resolver=slow)
+    finally:
+        release.set()
+    assert result == "unknown"
+    assert "pc.example" not in netinfo._address_cache  # timeouts aren't cached
+
+
+async def test_status_ip_literal_skips_lookup_and_name_connects_to_numeric_ip() -> None:
+    targets: list[tuple[str, int]] = []
+    looked_up: list[str] = []
+
+    async def opener(host, port):
+        targets.append((host, port))
+        raise ConnectionRefusedError(errno.ECONNREFUSED, "refused")
+
+    def resolver(host: str) -> str:
+        looked_up.append(host)
+        return "192.0.2.44"
+
+    assert await netinfo.check_status("192.0.2.7", 22, opener=opener, resolver=resolver) == "awake"
+    assert looked_up == []
+    devices = [{"id": "pc", "host": "pc.example", "status_port": 3389}]
+    for _ in range(2):  # the second call is served from the address cache
+        result = await netinfo.status_map(devices, None, opener=opener, resolver=resolver)
+        assert result == {"pc": "awake"}
+    assert looked_up == ["pc.example"]
+    assert targets == [("192.0.2.7", 22), ("192.0.2.44", 3389), ("192.0.2.44", 3389)]
+
+
+async def test_resolve_host_rules() -> None:
+    assert await netinfo.resolve_host("192.0.2.1", 1.0, lambda _h: "x") == "192.0.2.1"
+    assert await netinfo.resolve_host("", 1.0) is None
+    assert await netinfo.resolve_host("v6.example", 1.0, lambda _h: "2001:db8::1") is None
+    assert await netinfo.resolve_host("junk.example", 1.0, lambda _h: "not an ip") is None
+
+    def boom(_h: str) -> str:
+        raise OSError("resolver broke")
+
+    assert await netinfo.resolve_host("broken.example", 1.0, boom) is None
+    assert netinfo._address_cache["broken.example"][0] is None  # misses are cached briefly
+
+
+async def test_default_status_resolver_uses_getaddrinfo_ipv4(monkeypatch) -> None:
+    calls = []
+
+    def fake_getaddrinfo(host, port, family=0, type=0, *rest):
+        calls.append((host, family, type))
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.30", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    assert await netinfo.resolve_host("pc.example", 1.0) == "192.0.2.30"
+    assert calls == [("pc.example", socket.AF_INET, socket.SOCK_STREAM)]
+
+
+async def test_lookup_bound_fails_fast(monkeypatch) -> None:
+    monkeypatch.setattr(netinfo, "_lookup_slots", threading.BoundedSemaphore(1))
+    release = threading.Event()
+
+    def stuck(_ip: str):
+        release.wait(5)
+        return ("late.example", [], [])
+
+    try:
+        first = asyncio.create_task(netinfo.reverse_lookup("192.0.2.1", 1.0, stuck))
+        await asyncio.sleep(0.01)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        assert await netinfo.reverse_lookup("192.0.2.2", 1.0, stuck) is None
+        assert loop.time() - started < 0.5  # no free slot: didn't wait for the timeout
+    finally:
+        release.set()
+    assert await first == "late.example"
+
+
+async def test_late_answer_after_timeout_is_dropped() -> None:
+    release = threading.Event()
+    done = threading.Event()
+
+    def late(_ip: str):
+        release.wait(5)
+        done.set()
+        return ("late.example", [], [])
+
+    assert await netinfo.reverse_lookup("192.0.2.3", 0.02, late) is None
+    release.set()
+    assert done.wait(2)
+    await asyncio.sleep(0.05)  # the thread's call_soon_threadsafe runs; must not raise
+    assert "192.0.2.3" not in netinfo._hostname_cache
+
+
+async def test_reverse_lookup_names_are_sanitised() -> None:
+    def resolver(ip: str):
+        return ("evil‮gnp.exe​.example", [], [ip])
+
+    assert await netinfo.reverse_lookup("192.0.2.4", 1.0, resolver) == "evilgnp.exe.example"
+
+
+HANG_SCRIPT = """
+import asyncio, sys, time
+sys.path.insert(0, sys.argv[1])
+from wake_dispatch import netinfo
+
+async def main():
+    hang = lambda _arg: time.sleep(30)
+    assert await netinfo.reverse_lookup("192.0.2.1", 0.05, hang) is None
+    assert await netinfo.resolve_host("pc.example", 0.05, hang) is None
+    netinfo.shutdown_resolver()
+
+asyncio.run(main())
+"""
+
+
+def test_hung_lookup_does_not_block_interpreter_exit(tmp_path) -> None:
+    script = tmp_path / "hang.py"
+    script.write_text(HANG_SCRIPT)
+    started = time.monotonic()
+    result = subprocess.run(
+        [sys.executable, str(script), str(PY_MODULES)], timeout=20, capture_output=True
+    )
+    assert result.returncode == 0, result.stderr.decode()
+    assert time.monotonic() - started < 5

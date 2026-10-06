@@ -159,3 +159,18 @@ def test_backup_file_never_overwrites(work) -> None:
         str(work / "devices.json.bak-7-1"),
     )
     assert (work / "devices.json.bak-7").read_text() == "v1"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["[" * 100000, '{"version": 1, "devices": [' + "1" * 5000 + "]}"],
+    ids=["deeply-nested", "huge-int"],
+)
+def test_unparseable_settings_quarantined(work, text) -> None:
+    (work / "devices.json").write_text(text)
+    assert storage.load_settings(str(work), clock=lambda: 7)["devices"] == []
+    assert os.listdir(work) == ["devices.json.corrupt-7"]
+    assert storage.load_state(str(work), clock=lambda: 8)["last"] is None  # no state file yet
+    (work / "state.json").write_text(text)
+    assert storage.load_state(str(work), clock=lambda: 9)["last"] is None
+    assert "state.json.corrupt-9" in os.listdir(work)

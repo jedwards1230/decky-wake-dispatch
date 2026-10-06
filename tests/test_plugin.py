@@ -1,5 +1,6 @@
 """End-to-end through ``main.Plugin`` with the stub decky module and fake procfs."""
 
+import asyncio
 import json
 import subprocess
 import sys
@@ -145,7 +146,7 @@ async def test_instance_lifecycle(decky_env, sandbox) -> None:
     assert await plugin.list_devices() == []
     await plugin._unload()
     assert plugin._automation.watch_task is None
-    assert netinfo._rdns_pool is None
+    assert netinfo._resolver_closed
 
 
 async def test_legacy_class_as_self() -> None:
@@ -228,3 +229,112 @@ def test_every_module_imports_under_plain_python() -> None:
     )
     assert out.stdout.strip() == "ok"
     assert len(wake_dispatch.MODULES) == 8
+
+
+async def test_unload_never_yields(decky_env, sandbox, monkeypatch) -> None:
+    """Decky 3.2's listener can starve the loop at shutdown: _unload must not yield."""
+    monkeypatch.setattr(dispatch, "NETWORK_WAIT", {"manual": 60, "boot": 60, "resume": 60})
+    (sandbox["fake"] / "boot_id").write_text("boot-1\n")
+    plugin = main.Plugin()
+    await plugin._main()  # boot task waits for a route that never comes; watcher sleeps
+    auto = plugin._automation
+    resume = auto._fire_resume(60)
+    await asyncio.sleep(0)
+    tasks = [auto.boot_task, auto.watch_task, resume]
+    assert not any(t.done() for t in tasks)
+    coro = plugin._unload()
+    with pytest.raises(StopIteration):
+        coro.send(None)  # ran to completion without suspending once
+    assert auto.boot_task is None and auto.watch_task is None and not auto._resume_tasks
+    await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(t.cancelled() for t in tasks)
+    assert netinfo._resolver_closed
+
+
+async def test_unload_without_main_never_yields() -> None:
+    coro = main.Plugin()._unload()
+    with pytest.raises(StopIteration):
+        coro.send(None)
+
+
+async def test_callables_ignore_stray_args(decky_env, sandbox) -> None:
+    plugin = main.Plugin()
+    await plugin.save_devices([device(1)])
+    assert [d["id"] for d in await plugin.list_devices(None)] == ["pc-1"]
+    assert (await plugin.get_state(None, 1))["last"] is None
+    assert await plugin.current_network("x") is None
+    assert await plugin.neighbours(None) == []
+    assert json.loads(await plugin.export_config(None))["devices"][0]["id"] == "pc-1"
+    write_network(sandbox["fake"], HOME_ROUTE, {"wlan0": "up"})
+    record = await plugin.wake(["pc-1"], "manual", "extra")
+    assert record["outcome"] == "sent" and "ok" not in record
+    assert (await plugin.wake())["trigger"] == "manual"  # defaults: all devices, manual
+    assert await plugin.status() == {"pc-1": "unknown"}
+    assert await plugin.status(["pc-1"], "extra") == {"pc-1": "unknown"}
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (("pc-1", "manual"), "Device ids must be a list"),
+        (([1, 2], "manual"), "Device ids must be a list"),
+        (({"id": "pc-1"}, "manual"), "Device ids must be a list"),
+        ((None, "shutdown"), "Unknown trigger 'shutdown'"),
+        ((None, 5), "Unknown trigger 5"),
+    ],
+)
+async def test_wake_bad_args_return_error_shape(decky_env, sandbox, args, message) -> None:
+    write_network(sandbox["fake"], HOME_ROUTE, {"wlan0": "up"})
+    plugin = main.Plugin()
+    await plugin.save_devices([device(1)])
+    result = await plugin.wake(*args)
+    assert result["ok"] is False and result["error"].startswith(message)
+    assert result["outcome"] == "failed" and result["results"] == {}
+    assert result["trigger"] == "manual"
+    assert sandbox["sent"] == [] and decky_env.emitted == []
+    assert (await plugin.get_state())["last"] is None  # not recorded
+
+
+@pytest.mark.parametrize("ids", ["pc-1", [1], {"pc-1": True}, 7])
+async def test_status_bad_ids_return_empty(decky_env, ids) -> None:
+    plugin = main.Plugin()
+    await plugin.save_devices([device(1, host="192.0.2.1", status_port=22)])
+    assert await plugin.status(ids) == {}
+
+
+async def test_dropped_device_backed_up_once_when_rewrite_keeps_failing(
+    decky_env, monkeypatch
+) -> None:
+    _settings_file(decky_env).write_text(
+        json.dumps({"version": 1, "devices": [device(1), {"name": "Broken", "mac": "x"}]})
+    )
+
+    def boom(*_a):
+        raise OSError(30, "Read-only file system")
+
+    monkeypatch.setattr(main.storage, "save_settings", boom)
+    for _ in range(3):
+        assert [d["id"] for d in await main.Plugin().list_devices()] == ["pc-1"]
+    settings_dir = Path(decky_env.DECKY_PLUGIN_SETTINGS_DIR)
+    assert len(list(settings_dir.glob("devices.json.bak-*"))) == 1
+
+
+async def test_stored_device_with_bad_host_is_kept_and_backed_up_once(decky_env) -> None:
+    original = json.dumps({"version": 1, "devices": [device(1, host="my_pc.lan", status_port=22)]})
+    _settings_file(decky_env).write_text(original)
+    for _ in range(2):
+        [kept] = await main.Plugin().list_devices()
+        assert (kept["id"], kept["host"], kept["status_port"]) == ("pc-1", None, 22)
+    [backup] = list(Path(decky_env.DECKY_PLUGIN_SETTINGS_DIR).glob("devices.json.bak-*"))
+    assert backup.read_text() == original
+    assert json.loads(_settings_file(decky_env).read_text())["devices"] == [kept]
+
+
+async def test_main_after_unload_reopens_the_resolver(decky_env, sandbox) -> None:
+    plugin = main.Plugin()
+    await plugin._main()
+    await plugin._unload()
+    assert await netinfo.reverse_lookup("192.0.2.8", 1.0, lambda ip: ("pc", [], [ip])) is None
+    await plugin._main()
+    assert await netinfo.reverse_lookup("192.0.2.8", 1.0, lambda ip: ("pc", [], [ip])) == "pc"
+    await plugin._unload()

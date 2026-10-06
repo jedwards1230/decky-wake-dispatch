@@ -99,7 +99,8 @@ def quarantine(path: str, clock: Callable[[], float] = time.time) -> str | None:
 def read_json(path: str, clock: Callable[[], float] = time.time) -> Any | None:
     """Return the parsed JSON at ``path``, or ``None`` if it is missing, unreadable or corrupt.
 
-    A corrupt file (invalid JSON or not UTF-8) is quarantined, see ``quarantine``.
+    A corrupt file (invalid JSON, not UTF-8, nested too deeply for the parser,
+    or holding a number too long to convert) is quarantined, see ``quarantine``.
     A file that can't be opened (permissions, a directory in the way) is logged
     and left alone.
     """
@@ -111,7 +112,7 @@ def read_json(path: str, clock: Callable[[], float] = time.time) -> Any | None:
     except OSError as exc:
         get_logger().error("Could not read %s: %s", path, exc)
         return None
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError, RecursionError, ValueError) as exc:
         get_logger().warning("Corrupt JSON in %s: %s", path, exc)
         quarantine(path, clock)
         return None

@@ -118,7 +118,8 @@ wake keeps the PC running, and using power, until it goes back to sleep on its o
 
 **Export settings** shows your device list as text you can copy. **Import settings**
 takes that text and either merges it into your list (adding new devices and updating
-matching ones) or replaces your list. The list itself is stored in
+matching ones) or replaces your list. A list holds up to 64 devices, and an import can be up to
+256 KB of text. The list itself is stored in
 `~/homebrew/settings/wake-dispatch/devices.json`, which you can also back up from
 Desktop Mode.
 
@@ -170,12 +171,14 @@ Battery, depending on the Mac and macOS version).
   as the broadcast address under advanced settings.
 - **Try the other wake port.** Most PCs listen on UDP port 9; some only on 7 (**Wake
   port** under advanced settings).
-- **The status says Unknown.** The status check address couldn't be looked up. Check
-  the name, or use the PC's IP address under advanced settings. (A device with no status
-  check shows "No status check" instead.)
-- **The status says Asleep but the PC is on.** The status check only shows whether the
-  chosen service answers on that port. The service may not be running, or a firewall on
-  the PC may be blocking the port.
+- **The status says Unknown.** The status check address couldn't be looked up in time,
+  or your Steam device has no route to it right now (for example it isn't on the PC's
+  network). Check the name, or use the PC's IP address under advanced settings. (A
+  device with no status check shows "No status check" instead.)
+- **The status says Asleep but the PC is on.** The status check shows Awake when the PC
+  answers on that port at all, even to refuse the connection. Asleep means nothing
+  answered within a second, which usually means a firewall on the PC silently drops
+  connections to that port; allow it, or pick a port the PC answers on.
 - **Logs.** The plugin writes its log to `~/homebrew/logs/wake-dispatch/` on your Steam
   device. Include the relevant lines when reporting a problem.
 - **Desktop Mode.** The Wake Dispatch panel is only available in Game Mode, but

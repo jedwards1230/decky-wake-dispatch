@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import socket
 import sys
+import threading
 import types
 from collections.abc import Iterator
 from pathlib import Path
@@ -61,6 +62,15 @@ def sandbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[st
     monkeypatch.setattr(netinfo, "PROC_ARP", str(fake / "arp"))
     monkeypatch.setattr(netinfo, "SYS_CLASS_NET", str(fake / "sys-net"))
     monkeypatch.setattr(netinfo, "BOOT_ID_PATH", str(fake / "boot_id"))
+    # shutdown_resolver() (run after every test, and by Plugin._unload) closes the
+    # resolver for good; monkeypatch restores it to open for the next test.
+    monkeypatch.setattr(netinfo, "_resolver_closed", False)
+    # Fresh lookup slots and queue, so threads a test left blocked can't hold
+    # slots into later tests.
+    monkeypatch.setattr(
+        netinfo, "_lookup_slots", threading.BoundedSemaphore(netinfo.LOOKUP_THREADS)
+    )
+    monkeypatch.setattr(netinfo, "_lookup_queue", None)
     sent: list[dict[str, Any]] = []
     monkeypatch.setattr(packet, "make_socket", lambda: FakeSocket(sent))
     yield {"fake": fake, "sent": sent}

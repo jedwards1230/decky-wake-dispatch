@@ -12,6 +12,7 @@ import ipaddress
 import json
 import re
 import secrets
+import unicodedata
 from collections.abc import Iterable
 from typing import Any
 
@@ -25,6 +26,19 @@ DEFAULT_PORT = 9
 NAME_MAX = 64
 ID_MAX = 128
 HOST_MAX = 253
+MAX_DEVICES = 64
+IMPORT_MAX_BYTES = 256 * 1024
+# The panel joins ids with "," for some calls, so ids stay to a safe alphabet.
+ID_PATTERN = re.compile(r"[A-Za-z0-9._-]{1,128}")
+_HOST_LABEL = re.compile(r"(?!-)[A-Za-z0-9-]{1,63}(?<!-)")
+# Unicode categories removed from names: controls (Cc), format characters
+# (Cf: bidi overrides, zero-width joiners and spaces, soft hyphen, ...), lone
+# surrogates (Cs) and private-use characters (Co).
+_STRIPPED_CATEGORIES = frozenset({"Cc", "Cf", "Cs", "Co"})
+# A stored device with a bad value in one of these fields is kept with the field
+# reset (a new id, no status check) instead of being dropped.
+_REPAIRABLE = {"id": "", "host": None, "status_port": None}
+_WHITESPACE = re.compile(r"\s+")
 IMPORT_MODES = ("replace", "merge")
 FIELDS = (
     "id",
@@ -58,6 +72,48 @@ class DeviceError(ValueError):
 
 class ConfigError(ValueError):
     """An import that can't be read at all (bad JSON, wrong shape, bad mode)."""
+
+
+def _clean_text(value: Any) -> str:
+    """NFC-normalise, drop Cc/Cf/Cs/Co characters, collapse whitespace runs, trim."""
+    if not isinstance(value, str):
+        return ""
+    text = unicodedata.normalize("NFC", value)
+    text = "".join(
+        " " if ch.isspace() else ch
+        for ch in text
+        if ch.isspace() or unicodedata.category(ch) not in _STRIPPED_CATEGORIES
+    )
+    return _WHITESPACE.sub(" ", text).strip()
+
+
+def sanitise_name(value: str, max_len: int = NAME_MAX) -> str:
+    """Return ``value`` cleaned for display: NFC, no control/format characters
+    (bidi overrides, zero-width), whitespace collapsed and trimmed, at most
+    ``max_len`` characters. Empty or non-text input gives ``""``.
+    """
+    return _clean_text(value)[:max_len].rstrip()
+
+
+def valid_host(value: str) -> bool:
+    """True for an IP literal (no IPv6 scope) or an RFC 1123 hostname.
+
+    A name whose last label is all digits (``1.2.3``, ``192.168.001.1``) is not a
+    hostname (RFC 3696 section 2); only real IP literals pass as addresses.
+    """
+    if "%" not in value:
+        try:
+            ipaddress.ip_address(value)
+            return True
+        except ValueError:
+            pass
+    name = value[:-1] if value.endswith(".") else value
+    if not name or len(name) > HOST_MAX:
+        return False
+    labels = name.split(".")
+    if labels[-1].isdigit():
+        return False
+    return all(_HOST_LABEL.fullmatch(label) for label in labels)
 
 
 def _fail(index: int, field: str, message: str) -> DeviceError:
@@ -98,13 +154,16 @@ def validate_device(raw: Any, index: int) -> dict[str, Any]:
     device_id = raw.get("id")
     if _blank(device_id):
         device_id = ""
-    elif not isinstance(device_id, str) or len(device_id.strip()) > ID_MAX:
-        raise _fail(index, "id", f"The id must be text of at most {ID_MAX} characters.")
+    elif not isinstance(device_id, str) or not ID_PATTERN.fullmatch(device_id.strip()):
+        raise _fail(
+            index,
+            "id",
+            f"The id must be 1 to {ID_MAX} letters, digits, dots, dashes or underscores.",
+        )
     else:
         device_id = device_id.strip()
 
-    name = raw.get("name")
-    name = name.strip() if isinstance(name, str) else ""
+    name = _clean_text(raw.get("name"))
     if not 1 <= len(name) <= NAME_MAX:
         raise _fail(index, "name", f"Enter a name of 1 to {NAME_MAX} characters.")
 
@@ -126,7 +185,7 @@ def validate_device(raw: Any, index: int) -> dict[str, Any]:
     host = raw.get("host")
     if _blank(host):
         host = None
-    elif not isinstance(host, str) or len(host.strip()) > HOST_MAX:
+    elif not isinstance(host, str) or not valid_host(host.strip()):
         raise _fail(index, "host", "The status host must be an IP address or hostname.")
     else:
         host = host.strip()
@@ -231,34 +290,69 @@ def _assign_ids(devices: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return devices
 
 
+def _too_many() -> str:
+    return f"You can save at most {MAX_DEVICES} devices."
+
+
 def validate_devices(raw: Any) -> list[dict[str, Any]]:
     """Validate a whole device list, reject duplicate ids and MACs, then fill in missing ids."""
     if not isinstance(raw, list):
         raise DeviceError("Expected a list of devices.")
+    if len(raw) > MAX_DEVICES:
+        raise DeviceError(_too_many())
     devices = [validate_device(item, index) for index, item in enumerate(raw)]
     _check_unique_ids(devices)
     _check_unique_macs(devices)
     return _assign_ids(devices)
 
 
+def _validate_stored(item: Any, index: int) -> tuple[dict[str, Any], bool]:
+    """``validate_device``, resetting repairable fields that fail; ``(device, repaired)``."""
+    repaired = False
+    for _attempt in range(len(_REPAIRABLE) + 1):
+        try:
+            return validate_device(item, index), repaired
+        except DeviceError as exc:
+            if exc.field not in _REPAIRABLE or item.get(exc.field) == _REPAIRABLE[exc.field]:
+                raise
+            get_logger().warning("Stored device: %s; resetting %s", exc.message, exc.field)
+            item = {**item, exc.field: _REPAIRABLE[exc.field]}
+            repaired = True
+    return validate_device(item, index), repaired
+
+
 def sanitise_stored(raw: list[Any]) -> tuple[list[dict[str, Any]], int]:
-    """Validate devices read from disk; return ``(devices, number dropped)``.
+    """Validate devices read from disk; return ``(devices, number dropped or repaired)``.
 
     Invalid entries are dropped (and logged) so one bad entry doesn't hide the
-    rest; missing or duplicate ids get new ones. Duplicate MACs are tolerated
-    here (the next save asks the user to fix them). The caller persists the
-    result when it differs from ``raw`` so generated ids stay stable.
+    rest; missing or duplicate ids get new ones. A device whose id, status host
+    or status port fails validation (rules tightened by a newer build) is kept
+    with that field reset - a new id, or no status check - and counts in the
+    returned number like a dropped one, so the caller backs the file up first.
+    Only the first ``MAX_DEVICES`` valid devices are kept; the rest count as
+    dropped. Duplicate
+    MACs are tolerated here (the next save asks the user to fix them). The
+    caller persists the result when it differs from ``raw`` so generated ids
+    stay stable.
     """
     devices: list[dict[str, Any]] = []
     seen: set[str] = set()
     dropped = 0
     for index, item in enumerate(raw):
+        if len(devices) >= MAX_DEVICES:
+            dropped += len(raw) - index
+            get_logger().warning(
+                "Ignoring %d stored device(s) over the limit of %d", len(raw) - index, MAX_DEVICES
+            )
+            break
         try:
-            device = validate_device(item, index)
+            device, repaired = _validate_stored(item, index)
         except DeviceError as exc:
             get_logger().warning("Ignoring stored device: %s", exc.message)
             dropped += 1
             continue
+        if repaired:
+            dropped += 1
         if device["id"] in seen:
             device["id"] = ""
         seen.add(device["id"])
@@ -274,11 +368,20 @@ def parse_import(text: Any) -> list[Any]:
     """Parse import text (a bare list or ``{version, devices}``) into a raw device list."""
     if not isinstance(text, str) or not text.strip():
         raise ConfigError("Paste or choose a config to import.")
+    if len(text) > IMPORT_MAX_BYTES or len(text.encode("utf-8", "replace")) > IMPORT_MAX_BYTES:
+        raise ConfigError(
+            f"That config is too large to import (over {IMPORT_MAX_BYTES // 1024} KB)."
+        )
     try:
         raw = json.loads(text)
     except json.JSONDecodeError as exc:
         raise ConfigError(
             f"That isn't valid JSON (line {exc.lineno}, column {exc.colno})."
+        ) from None
+    except (RecursionError, ValueError):
+        # Nesting too deep for the parser, or a number too long to convert.
+        raise ConfigError(
+            "That config can't be read: it is nested too deeply or has a number that is too long."
         ) from None
     doc = migrate_settings(raw)
     if doc is None:
@@ -351,9 +454,17 @@ def import_devices(text: Any, mode: Any, existing: list[dict[str, Any]]) -> list
     if mode not in IMPORT_MODES:
         raise ConfigError('Import mode must be "replace" or "merge".')
     raw = parse_import(text)
+    if len(raw) > MAX_DEVICES:
+        raise ConfigError(f"That config has {len(raw)} devices; the limit is {MAX_DEVICES}.")
     incoming = [validate_device(item, index) for index, item in enumerate(raw)]
     _check_unique_ids(incoming)
     _check_unique_macs(incoming)
     if mode == "replace":
         return _assign_ids(incoming)
-    return _assign_ids(merge_devices(existing, incoming))
+    merged = merge_devices(existing, incoming)
+    if len(merged) > MAX_DEVICES:
+        raise ConfigError(
+            f"Merging would give {len(merged)} devices; the limit is {MAX_DEVICES}. "
+            "Remove some devices or import with replace."
+        )
+    return _assign_ids(merged)

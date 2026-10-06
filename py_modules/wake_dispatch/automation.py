@@ -15,6 +15,13 @@ kernels it also advances through s2idle, which would hide every suspend.
 
 Each resume dispatch runs as its own task (so the watcher keeps its cadence);
 the Dispatcher drops a resume that arrives while another is still running.
+
+Cooldown: once a resume wake got a packet out (outcome "sent" or "partial"),
+resumes detected within ``cooldown`` seconds of the resume that triggered it are
+ignored, measured on the same elapsed-real-time clock, so a Deck that dozes and
+wakes repeatedly doesn't re-wake the PC each time. Skipped, no-network and failed
+resume wakes don't start it, so arriving home later still wakes. Boot and manual
+wakes are never affected.
 """
 
 from __future__ import annotations
@@ -30,6 +37,8 @@ from wake_dispatch.log import get_logger
 
 RESUME_TICK = 5.0
 RESUME_GAP = 20.0
+RESUME_COOLDOWN = 600.0  # seconds after a resume wake that sent something
+COOLDOWN_OUTCOMES = ("sent", "partial")
 
 
 def _boottime() -> float:
@@ -53,6 +62,7 @@ class Automation:
         clock: Callable[[], float] | None = None,
         tick: float | None = None,
         gap: float | None = None,
+        cooldown: float | None = None,
     ) -> None:
         self.dispatcher = dispatcher
         self._load_state = load_state
@@ -62,6 +72,8 @@ class Automation:
         self._clock = clock or elapsed_clock
         self._tick = tick
         self._gap = gap
+        self._cooldown = cooldown
+        self._cooldown_from: float | None = None  # clock time of the resume that sent
         self.boot_task: asyncio.Task[Any] | None = None
         self.watch_task: asyncio.Task[Any] | None = None
         self._resume_tasks: set[asyncio.Task[Any]] = set()
@@ -96,15 +108,29 @@ class Automation:
 
     # -- resume ----------------------------------------------------------------
 
+    def _in_cooldown(self, now: float) -> bool:
+        cooldown = RESUME_COOLDOWN if self._cooldown is None else self._cooldown
+        return self._cooldown_from is not None and 0 <= now - self._cooldown_from < cooldown
+
+    async def _resume(self, detected_at: float) -> dict[str, Any]:
+        record = await self.dispatcher.dispatch("resume")
+        if record.get("outcome") in COOLDOWN_OUTCOMES:
+            self._cooldown_from = detected_at
+        return record
+
     def _fire_resume(self, frozen_for: float) -> asyncio.Task[Any] | None:
         if self.dispatcher.is_running("resume"):
             get_logger().info("Resume detected but a resume wake is still running; ignoring")
+            return None
+        now = self._clock()
+        if self._in_cooldown(now):
+            get_logger().info("Resume detected within the cooldown; ignoring")
             return None
         get_logger().info(
             "Resume detected (%.0fs of elapsed real time between ticks); waking devices",
             frozen_for,
         )
-        task = asyncio.get_running_loop().create_task(self.dispatcher.dispatch("resume"))
+        task = asyncio.get_running_loop().create_task(self._resume(now))
         self._resume_tasks.add(task)
         task.add_done_callback(self._resume_tasks.discard)
         return task

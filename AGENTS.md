@@ -88,6 +88,9 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
   re-checked. Document it, don't pretend otherwise. The MAC is captured on save by the
   backend when the input omits `home_gateway_mac`, so `src/store.ts` must not send a
   stale saved value back for a draft that didn't set it.
+- **The resume cooldown is in-memory and only starts on `sent` / `partial`.** A skipped
+  or no-network resume must not start it, or arriving home later wouldn't wake. Its
+  state is set from inside the resume task, so `Automation.cancel()` stays synchronous.
 - **Scan and find run only when the user presses Scan or Find.** Never call
   `discovery.scan_network` or `discovery.find_host` from automation or when the Quick
   Access panel opens, and don't store what they find. A find sends at most one packet,

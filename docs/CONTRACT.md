@@ -118,7 +118,8 @@ Argument tolerance:
 ## §3 Event
 
 `decky.emit("dispatched", record: DispatchRecord)` after every `wake` (manual or
-automatic), including skipped and no-network outcomes for automation.
+automatic), including skipped and no-network outcomes for automation. A resume ignored
+by the cooldown (§4) is not a wake and emits nothing.
 
 ## §4 Behaviour rules
 
@@ -152,6 +153,12 @@ automatic), including skipped and no-network outcomes for automation.
   ignores wall-clock steps; wall time only where it is unavailable) means the
   process was frozen in suspend -> dispatch `resume`. A resume that arrives while
   another is still running is dropped. Log resume -> route-up time.
+- Resume cooldown: after a resume dispatch whose outcome is `sent` or `partial`, resumes
+  detected less than 600 s (measured on the same `CLOCK_BOOTTIME` clock, from the
+  detection that led to that dispatch) later are ignored: logged "Resume detected within
+  the cooldown; ignoring", nothing dispatched, recorded or emitted. `skipped`,
+  `no_network` and `failed` resume outcomes don't start it. Boot and manual wakes are
+  never affected. The cooldown lives in memory only (a plugin reload clears it).
 - Status check: the host is resolved first (an IP literal needs no lookup; a name is
   looked up with a 1 s timeout on its own daemon thread and the answer cached for 30 s,
   a miss for 10 s), then a TCP connect to the numeric address with a 1 s timeout, and

@@ -57,7 +57,8 @@ path the same way Decky does.
   router's MAC when stored and known, IP-only fallback, one ARP read per wake), bursts,
   outcomes and reasons, per-device error isolation.
 - `test_automation.py`: the boot gate and the resume watcher, driven by injected clocks
-  and sleeps, and the synchronous `cancel`.
+  and sleeps, the resume cooldown (only after sent / partial, expiry at 600 s, boot
+  unaffected), and the synchronous `cancel`.
 - `test_updates.py`: the update check with an injected fetch and clock: strict release
   parsing, TLS context and fail-closed CA lookup, the HTTPS-only opener and redirect
   guard, the thread helper, cadence (daily cache, backoff, the 60 s "Check for updates"

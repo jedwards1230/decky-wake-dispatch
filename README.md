@@ -127,7 +127,10 @@ The panel shows the result of the last automatic wake, for example "Last automat
 on boot, 2 min ago — sent to Gaming PC", or why it was skipped.
 
 Handhelds wake from sleep often, so a resume wake can wake the PC many times a day. Each
-wake keeps the PC running, and using power, until it goes back to sleep on its own.
+wake keeps the PC running, and using power, until it goes back to sleep on its own. To
+soften that, once a wake from sleep has sent, the plugin ignores further wakes from sleep
+for 10 minutes. A wake from sleep that was skipped (for example because you weren't
+home), failed or found no network doesn't start that pause.
 
 ### Backup
 

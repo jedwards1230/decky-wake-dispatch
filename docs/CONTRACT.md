@@ -49,6 +49,16 @@ interface State {
 type Status = "awake" | "asleep" | "unknown"; // see §4 Status check
 
 interface Neighbour { ip: string; mac: string; iface: string; hostname: string | null }
+interface ScanNeighbour extends Neighbour { name_source: "mdns" | "dns" | null } // where hostname came from
+type ScanResult =
+  | { ok: true; neighbours: ScanNeighbour[]; probed: number; found: number;
+      named: number; duration_ms: number; gateway: string }
+  | { ok: false; error: string; busy?: true; retry_in?: number;
+      needs_confirm?: true; gateway?: string; cancelled?: true };
+type FindResult =
+  | { ok: true; ip: string; mac: string; name: string | null;
+      name_source: "typed" | "dns" | null } // typed = the hostname the user entered
+  | { ok: false; error: string; busy?: true; cancelled?: true };
 interface Network { iface: string; gateway: string } // current default route
 type Saved = { ok: true; devices: Device[] } | { ok: false; error: string; field?: string; index?: number };
 
@@ -84,12 +94,17 @@ type UpdateCheckSaved = { ok: true; enabled: boolean } | { ok: false; error: str
 | `import_config` | `text: string`, `mode: "replace" \| "merge"` | `Saved` (merge = upsert by id, then by MAC) |
 | `update_info` | `force: boolean` (only `true` forces; extra args ignored) | `UpdateInfo` (never raises; never installs) |
 | `set_update_check` | `enabled: boolean` | `UpdateCheckSaved` (a non-bool is `ok: false`) |
+| `scan_network` | `confirm_away?: boolean` (default false) | `ScanResult` (`found` = devices found, `named` = found devices with a name, `probed` = addresses probed) |
+| `cancel_scan` | — | `{ ok: true; cancelled: boolean }` (whether a scan was running; a pending `find_host` is not affected) |
+| `find_host` | `address: string` (IPv4 address or hostname) | `FindResult` (see §4 Find by address) |
 
 Argument tolerance:
 
-- `list_devices`, `get_state`, `current_network`, `neighbours` and `export_config`
-  ignore any positional arguments they are given; `wake` and `status` ignore any beyond
-  the ones listed.
+- `list_devices`, `get_state`, `current_network`, `neighbours`, `export_config` and
+  `cancel_scan` ignore any positional arguments they are given; `wake`, `status`,
+  `scan_network` and `find_host` ignore any beyond the ones listed. `scan_network`
+  treats anything but `true` as `confirm_away: false`; `find_host` with no or a
+  non-string address returns "Enter an IP address or a hostname".
 - `wake` with `ids` that isn't null or a list of strings, or a `trigger` that isn't a
   `Trigger`, sends nothing, records and emits nothing, and returns a `DispatchRecord`
   with `trigger: "manual"`, `outcome: "failed"`, empty `results`, the message in
@@ -210,4 +225,73 @@ automatic), including skipped and no-network outcomes for automation.
   it on every update, before extracting the new version.
 - Magic packet: 6 x 0xFF + MAC x 16 (102 bytes), + 6-byte SecureOn (108 bytes).
   UDP, SO_BROADCAST, to (`broadcast`, `port`).
+- Network scan (`scan_network`), only ever on the user's request, never from
+  automation:
+  - Order of checks, none of which sends anything: a scan already running ->
+    `busy`; within 30 s of the last scan that ran to the end (finished, network
+    changed or out of time; a cancelled scan doesn't count) -> `retry_in` (whole
+    seconds, >= 1); no default route; default route on a VPN interface (`tun*`,
+    `wg*`, `tailscale*`, `ppp*`, `zt*`) -> refused; then the targets; then, unless
+    `confirm_away` is `true`, a current gateway that isn't any device's
+    `home_gateway` (or no device has one) -> `needs_confirm` with `gateway`.
+  - Targets: the default-route interface's own address (from a UDP `connect`,
+    which sends nothing) and the most specific on-link (non-gateway) route in
+    `/proc/net/route` containing it, else a /24 around it. The prefix must lie
+    wholly inside 10/8, 172.16/12 or 192.168/16 (so CGNAT, link-local, loopback and
+    public networks are refused); wider than /24 -> only the /24 around the own
+    address. Without an on-link route the own address must also be the one
+    configured on that interface (`SIOCGIFADDR`), else the scan is refused. Own,
+    network and broadcast addresses are skipped; at most 254.
+  - Probe: one zero-length UDP datagram to port 9 per target from a socket bound
+    to the own address with `SO_DONTROUTE`, at most 50 per second; send errors are
+    ignored, but a socket that can't be set up returns "Couldn't start the scan"
+    (no cooldown). The default route is
+    re-checked every 16 sends, after the last, after the ARP wait and again before
+    the result is returned; a different interface or gateway aborts with "The
+    network changed during the scan". Then a 3 s wait for ARP,
+    and `/proc/net/arp` entries on the scanned interface whose address is a target
+    or the gateway are the result.
+  - Names, concurrently: reverse DNS per address (1.5 s each, at most 16 at once)
+    and mDNS reverse PTR queries to 224.0.0.251:5353 from one ephemeral-port socket
+    (never bound to 5353), for at most 3 s. Because the source port isn't 5353,
+    responders answer by unicast to it (RFC 6762 legacy unicast). A reply counts
+    only from port 5353 of an address that was asked about, about that same
+    address, with a `.local` name whose labels contain no `.` and aren't empty once
+    sanitised. Packets over 9000 bytes or with any malformation are dropped; only
+    answer records actually parsed count against the limits of 256 in total and
+    16 per responder.
+    Preference: mDNS > reverse DNS. Every name is NFC-normalised,
+    stripped of control and format characters, whitespace-collapsed and capped at
+    64 characters.
+  - The whole scan is bounded at 15 s; running out of time after ARP was read
+    returns what was found, before that an error. `cancel_scan` (and `_unload`,
+    synchronously) cancels it; the pending call returns `cancelled: true`.
+  - Nothing found is stored; results only pre-fill the device editor.
+- Find by address (`find_host`), only ever on the user's request, never from
+  automation. Not subject to the scan's lock or cooldown, and needs no
+  `confirm_away`; one find at a time (another -> `busy`, "Still looking — try again
+  in a moment"). In order:
+  - The address must be a string of at most 253 characters that is an IPv4
+    literal or an RFC 1123 hostname (`devices.valid_host`; IPv6 is refused), else
+    "Enter an IP address or a hostname".
+  - The default route, own address and on-link prefix come from the scan's
+    checks (no route, VPN interface, own address, home ranges only), but the
+    prefix is the real one, not narrowed to /24. These send nothing and run before
+    any name lookup.
+  - A hostname is resolved with `resolve_host` (2 s); no IPv4 answer -> "Couldn't
+    find that name on this network".
+  - The address must lie inside that prefix ("That address isn't on this
+    network"), must not be this device's ("That's this device's own address") or
+    the prefix's network or broadcast address. None of these sends anything.
+  - A complete `/proc/net/arp` entry for it on that interface is returned without
+    sending anything. Otherwise exactly one zero-length UDP datagram goes to port 9
+    (the scan's socket setup: `SO_DONTROUTE`, bound to the own address) and ARP is
+    re-read every 0.25 s for up to 2 s; no entry -> "No answer — is the PC on and
+    connected to this network?". A socket that can't be set up -> "Couldn't send
+    to that address".
+  - Name: a typed hostname is used as typed (sanitised, trailing dot dropped,
+    `name_source: "typed"`); for a typed IP, reverse DNS (1.5 s, `"dns"`). Empty ->
+    `name: null`, `name_source: null`.
+  - Nothing is stored. `_unload` cancels a pending find synchronously; the pending
+    call returns `cancelled: true`.
 - Stdlib only, Python 3.11. Logging via `decky.logger`.

@@ -73,6 +73,12 @@ and give it a name (for example "Gaming PC"):
   their names where your network provides them. Turn the PC on once so it shows up.
   Picking a device fills in its MAC address, its address for status checks and, if you
   haven't typed one, a name.
+  If your PC isn't listed, choose **Scan network**: the plugin briefly checks every
+  address on your home network so devices that haven't talked to your Steam device yet
+  show up too. It takes up to about 15 seconds and asks first if you're not on your
+  home network.
+  If you know the PC's IP address or name, choose **Find by IP or name** instead and
+  type it: the plugin checks just that one address and fills in its MAC address.
 - **Type the MAC address**: any common format works, for example `aa:bb:cc:dd:ee:01`,
   `aa-bb-cc-dd-ee-01` or `aabbccddee01`.
 
@@ -200,6 +206,13 @@ Wake Dispatch makes no network connections except:
 - TCP status checks to the addresses and ports you configure (and, if you enter a
   hostname rather than an IP address, the DNS lookup for it);
 - reverse DNS lookups for the addresses in **Pick from network**, to show device names;
+- only when you press **Scan network**: one empty UDP packet to each address on your
+  local network (its /24 or smaller, home address ranges only, never over a VPN),
+  mDNS name queries on the local network, and reverse DNS lookups for the devices
+  found;
+- only when you press **Find**: one empty UDP packet to the one address you typed,
+  and only if it is on your local network, plus a DNS lookup if you typed a name
+  (and a reverse DNS lookup if you typed an address);
 - the update check: one HTTPS request to `api.github.com` for the latest release of this
   plugin, only when you press **Check for updates**, or at most once a day when you
   open the panel if you turned on the daily check (it is off by default). Like any web
@@ -209,7 +222,9 @@ When you press **Update** and confirm, Decky downloads the zip from GitHub and, 
 does for every install from a URL, sends an install-counter request to its plugin
 store (`plugins.deckbrew.xyz`).
 
-Nothing is sent anywhere else. Your settings stay on your device.
+Scan and find traffic never leaves your local network, apart from the DNS lookups.
+Nothing is sent anywhere else. Your settings stay on your device; devices found by a
+scan or a find are not stored.
 
 ## Contributing
 

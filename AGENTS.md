@@ -84,6 +84,16 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
 - **The home-network gate is the router's IP address, checked once per wake.** Another
   network with the same gateway address counts as home, and a network change during the
   burst isn't re-checked. Document it, don't pretend otherwise.
+- **Scan and find run only when the user presses Scan or Find.** Never call
+  `discovery.scan_network` or `discovery.find_host` from automation or when the Quick
+  Access panel opens, and don't store what they find. A find sends at most one packet,
+  only to an address on the default-route interface's own prefix; check that before
+  sending. The mDNS socket binds an ephemeral port, never 5353, which would collide
+  with the system's responder and receive every multicast on the network.
+- **`_unload` must never yield before cancelling work.** `discovery.cancel()` and
+  `discovery.cancel_find()` are sync and come first. They only request cancellation:
+  the sockets are closed by each task's own cleanup, which runs only if the event loop
+  runs again after `_unload`.
 - **`README.md` ships inside the zip.** `scripts/package.sh` requires it, and the CI zip
   check fails without it; it is also what users see, so keep it free of contributor
   detail.
@@ -111,9 +121,12 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
    is backed up or quarantined, never overwritten blind.
 7. **No network traffic beyond what the README's Privacy section lists**: the wakes the
    user triggers or enabled, status checks (and their name lookups) to configured
-   hosts, reverse lookups for the network picker, and the update check (one HTTPS GET
-   to `api.github.com` when the user presses "Check for updates", plus at most daily
-   when they opted in to the daily check, which is off by default).
+   hosts, reverse lookups for the network picker, the network scan the user starts
+   (empty UDP probes to the local /24 or smaller, mDNS and reverse lookups for the
+   addresses found), the find the user starts (one empty UDP probe to the one
+   on-link address typed, plus its forward or reverse DNS lookup), and the update check
+   (one HTTPS GET to `api.github.com` when the user presses "Check for updates", plus at
+   most daily when they opted in to the daily check, which is off by default).
 
 ## Design discipline
 

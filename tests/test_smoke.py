@@ -15,6 +15,9 @@ CONTRACT_CALLABLES = [
     "import_config",
     "update_info",
     "set_update_check",
+    "scan_network",
+    "cancel_scan",
+    "find_host",
 ]
 LIFECYCLE = ["_main", "_unload", "_uninstall"]
 

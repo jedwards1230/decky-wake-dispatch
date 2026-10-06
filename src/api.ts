@@ -45,6 +45,46 @@ export interface Neighbour {
   hostname: string | null;
 }
 
+/** A device a scan found; name_source says where hostname came from. */
+export interface ScanNeighbour extends Neighbour {
+  name_source: "mdns" | "dns" | null;
+}
+
+export type ScanResult =
+  | {
+      ok: true;
+      neighbours: ScanNeighbour[];
+      probed: number;
+      found: number;
+      named: number;
+      duration_ms: number;
+      gateway: string;
+    }
+  | {
+      ok: false;
+      error: string;
+      /** another scan is running */
+      busy?: true;
+      /** cooldown: seconds until a scan is allowed again */
+      retry_in?: number;
+      /** not the home network: ask, then call scanNetwork(true) */
+      needs_confirm?: true;
+      gateway?: string;
+      cancelled?: true;
+    };
+
+export type CancelScanResult = { ok: true; cancelled: boolean };
+export type FindResult =
+  | {
+      ok: true;
+      ip: string;
+      mac: string;
+      name: string | null;
+      /** typed = the hostname the user entered; dns = reverse lookup of a typed IP */
+      name_source: "typed" | "dns" | null;
+    }
+  | { ok: false; error: string; busy?: true; cancelled?: true };
+
 export interface Network {
   iface: string;
   gateway: string;
@@ -96,3 +136,6 @@ export const exportConfig = callable<[], string>("export_config");
 export const importConfig = callable<[text: string, mode: ImportMode], Saved>("import_config");
 export const updateInfo = callable<[force: boolean], UpdateInfo>("update_info");
 export const setUpdateCheck = callable<[enabled: boolean], UpdateCheckSaved>("set_update_check");
+export const scanNetwork = callable<[confirmAway?: boolean], ScanResult>("scan_network");
+export const cancelScan = callable<[], CancelScanResult>("cancel_scan");
+export const findHost = callable<[address: string], FindResult>("find_host");

@@ -159,7 +159,7 @@ export const EDITOR = {
   portHint: "Usually 9. Some PCs listen on 7.",
   portInvalid: "Use a number from 1 to 65535.",
   statusHost: "Status check address",
-  statusHostHint: "The PC's IP address or hostname, for example 192.168.1.20. Used only for Awake/Asleep.",
+  statusHostHint: "The PC's IP address or hostname, for example 192.0.2.20. Used only for Awake/Asleep.",
   statusPort: "Status check port (TCP)",
   statusPortHint: "Leave empty to skip the check.",
   secureon: "Wake password (SecureOn) — rarely needed",
@@ -180,7 +180,7 @@ export const EDITOR = {
 
 export const PICKER = {
   title: "Pick from network",
-  intro: "Devices this Deck has talked to recently. Turn the PC on once so it shows up here.",
+  intro: "Devices this Deck has talked to recently.",
   loading: "Looking for devices…",
   empty: "No PCs found. Turn the PC on, make sure it's on the same network, then Scan network.",
   asleepHint: "A PC that's asleep or off can't be found. Wake it once by hand, or type its MAC address instead.",
@@ -196,7 +196,8 @@ export const PICKER = {
   scanHint: "Takes about 10 seconds. Finds PCs that are on right now.",
   scanning: "Scanning…",
   cancelScan: "Cancel scan",
-  scanFound: (found: number, named: number) => `Found ${found} (${named} named)`,
+  scanFound: (found: number, named: number) => (named > 0 ? `Found ${found} (${named} named)` : `Found ${found}`),
+  scanNone: "No PCs found",
   scanBusy: "A scan is already running. Wait for it to finish.",
   scanRetryIn: (seconds: number) => `Try again in ${seconds} s`,
   awayTitle: "Scan this network?",
@@ -204,7 +205,7 @@ export const PICKER = {
   awayOk: "Scan",
 
   find: "Find by IP or name",
-  findHint: "Type the PC's IP address or hostname, for example 192.168.1.20.",
+  findHint: "Type the PC's IP address or hostname, for example 192.0.2.20.",
   findButton: "Find",
   finding: "Finding…",
   findEmpty: "Type an IP address or a name first.",

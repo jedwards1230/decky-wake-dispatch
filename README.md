@@ -211,7 +211,7 @@ Battery, depending on the Mac and macOS version).
   Wake-on-LAN packets are broadcasts: they only reach PCs on the same network segment as
   your Steam device. They do not cross subnets or VLANs, and guest Wi-Fi networks or
   access points with client isolation usually drop them. Connect both to the same
-  network, or try a directed broadcast for your network (for example `192.168.1.255`)
+  network, or try a directed broadcast for your network (for example `192.0.2.255`)
   as **Send to address** under More settings.
 - **Try the other wake port.** Most PCs listen on UDP port 9; some only on 7 (**Wake
   port** under More settings).

@@ -82,6 +82,9 @@ export function NetworkPicker({ onPick, closeModal }: Props) {
   const firstRef = useRef<HTMLDivElement>(null);
   const scanRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef<HTMLDivElement>(null);
+  const cancelScanRef = useRef<HTMLDivElement>(null);
+  // Only the newest neighbours() answer counts (Refresh can overlap the first load).
+  const loadSeq = useRef(0);
 
   useEffect(() => {
     mounted.current = true;
@@ -92,18 +95,26 @@ export function NetworkPicker({ onPick, closeModal }: Props) {
     };
   }, []);
 
+  /**
+   * Read what this Deck has seen recently. The answer merges into the list
+   * rather than replacing it, so names a scan found survive a Refresh, and an
+   * answer overtaken by a newer Refresh is dropped.
+   */
   const load = useCallback(() => {
-    setItems(null);
+    const seq = ++loadSeq.current;
+    const current = () => mounted.current && seq === loadSeq.current;
     setFailed(false);
     currentNetwork()
-      .then((net) => mounted.current && setGateway(net?.gateway ?? null))
-      .catch(() => mounted.current && setGateway(null));
+      .then((net) => current() && setGateway(net?.gateway ?? null))
+      .catch(() => current() && setGateway(null));
     neighbours()
-      .then((list) => mounted.current && setItems(list))
+      .then((list) => {
+        if (current()) setItems((prev) => merge(prev ?? [], list));
+      })
       .catch((e: unknown) => {
         console.error("[Wake Dispatch] neighbours failed", e);
-        if (!mounted.current) return;
-        setItems([]);
+        if (!current()) return;
+        setItems((prev) => prev ?? []);
         setFailed(true);
       });
   }, []);
@@ -130,40 +141,51 @@ export function NetworkPicker({ onPick, closeModal }: Props) {
     if (scanning.current) return;
     scanning.current = true;
     setScan({ phase: "scanning" });
+    // Whatever happens, the scan ends in exactly one of these; applied in finally.
+    let next: ScanState = { phase: "idle" };
+    let found = 0;
+    let askAway = false;
     try {
       const result = await scanNetwork(confirmAway);
-      if (!mounted.current) return;
       if (result.ok) {
-        setItems((prev) => merge(prev ?? [], result.neighbours));
-        setFailed(false);
-        setGateway(result.gateway);
-        setScan({ phase: "done", found: result.found, named: result.named });
-        // Move to the results only if focus is still on Scan network.
-        if (result.neighbours.length > 0 && holdsFocus(scanRef.current)) {
-          focusSoon(() => firstRef.current);
+        if (mounted.current) {
+          setItems((prev) => merge(prev ?? [], result.neighbours));
+          setFailed(false);
+          setGateway(result.gateway);
         }
-        return;
-      }
-      if (result.cancelled) setScan({ phase: "idle" });
-      else if (result.needs_confirm) {
-        setScan({ phase: "idle" });
-        showModal(
-          <ConfirmAction
-            title={PICKER.awayTitle}
-            body={PICKER.awayBody}
-            okText={PICKER.awayOk}
-            onOK={() => void runScan(true)}
-          />,
-        );
-      } else if (result.busy) setScan({ phase: "message", text: PICKER.scanBusy, error: false });
+        next = { phase: "done", found: result.found, named: result.named };
+        found = result.neighbours.length;
+      } else if (result.cancelled) next = { phase: "idle" };
+      else if (result.needs_confirm) askAway = true;
+      else if (result.busy) next = { phase: "message", text: PICKER.scanBusy, error: false };
       else if (result.retry_in !== undefined) {
-        setScan({ phase: "message", text: PICKER.scanRetryIn(result.retry_in), error: false });
-      } else setScan({ phase: "message", text: result.error, error: true });
+        next = { phase: "message", text: PICKER.scanRetryIn(result.retry_in), error: false };
+      } else next = { phase: "message", text: result.error, error: true };
     } catch (e) {
       console.error("[Wake Dispatch] scan_network failed", e);
-      if (mounted.current) setScan({ phase: "message", text: PICKER.failed, error: true });
+      next = { phase: "message", text: PICKER.failed, error: true };
     } finally {
       scanning.current = false;
+      if (mounted.current) {
+        // Cancel scan disappears with the phase change: if it held focus, hand
+        // it to Scan network rather than letting it drop. From Scan network,
+        // a scan that found something moves on to the first result.
+        const onCancelScan = holdsFocus(cancelScanRef.current);
+        const onScan = holdsFocus(scanRef.current);
+        setScan(next);
+        if (onCancelScan) focusSoon(() => scanRef.current, { retry: "always" });
+        else if (onScan && found > 0) focusSoon(() => firstRef.current);
+        if (askAway) {
+          showModal(
+            <ConfirmAction
+              title={PICKER.awayTitle}
+              body={PICKER.awayBody}
+              okText={PICKER.awayOk}
+              onOK={() => void runScan(true)}
+            />,
+          );
+        }
+      }
     }
   };
 
@@ -215,7 +237,11 @@ export function NetworkPicker({ onPick, closeModal }: Props) {
         {PICKER.scanning}
       </span>
     ) : scan.phase === "done" ? (
-      PICKER.scanFound(scan.found, scan.named)
+      scan.found === 0 ? (
+        PICKER.scanNone
+      ) : (
+        PICKER.scanFound(scan.found, scan.named)
+      )
     ) : scan.phase === "message" ? (
       scan.error ? (
         <InlineError>{scan.text}</InlineError>
@@ -281,12 +307,13 @@ export function NetworkPicker({ onPick, closeModal }: Props) {
           <DialogButton onClick={() => void runScan(false)}>{scan.phase === "scanning" ? PICKER.scanning : PICKER.scan}</DialogButton>
         </div>
         {scan.phase === "scanning" && (
-          <DialogButton style={{ flex: 1 }} onClick={stopScan}>
-            {PICKER.cancelScan}
-          </DialogButton>
+          <div ref={cancelScanRef} style={{ flex: 1 }}>
+            <DialogButton onClick={stopScan}>{PICKER.cancelScan}</DialogButton>
+          </div>
         )}
       </Focusable>
-      <Field description={scanStatus} bottomSeparator="none" focusable={false} />
+      {/* Plain text, not a Field: a Field's grey row reads as something focusable. */}
+      <DialogBodyText style={{ margin: "6px 0 12px" }}>{scanStatus}</DialogBodyText>
 
       <TextField
         label={PICKER.find}

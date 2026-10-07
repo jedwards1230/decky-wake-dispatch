@@ -122,6 +122,10 @@ Decky Loader:
    fill in its MAC address and status address; an address off this network shows the
    backend's error under the field. Close the picker mid-scan and check the backend log
    shows the scan cancelled.
+   From a network that isn't any device's home network, press **Scan network**: the
+   "Scan this network?" confirm opens on Cancel, and **Scan** then runs the scan. While a
+   **Find** is running, the button reads "Finding…" and further presses are ignored
+   (the backend log shows one lookup).
 5. For the update check, install a build whose packaged version is older than the
    latest release (`scripts/package.sh --version 0.0.1`). Open the panel with **Check
    daily** still off (the default): the Updates section says "Automatic checks are off"

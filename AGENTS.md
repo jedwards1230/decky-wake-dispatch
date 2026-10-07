@@ -152,6 +152,7 @@ Build, test, and lint commands live in [CONTRIBUTING.md](CONTRIBUTING.md).
 scripts/package.sh --no-build                # re-zip the existing dist/ after a backend-only change
 scripts/package.sh --version 1.2.3           # stamp a version into the packaged package.json
 pytest -q tests/test_dispatch.py -k gateway  # one backend test file or test
+scripts/install-over-cdp.mjs 192.0.2.10 --dry-run  # dev: open Decky's install prompt for a release over CDP (CONTRIBUTING.md)
 ```
 
 On a device the backend log is `~/homebrew/logs/wake-dispatch/`.

@@ -64,8 +64,10 @@ Your devices and settings are kept when you update, reinstall or change versions
 Open the Quick Access menu and choose Wake Dispatch. Press **Wake** next to a device, or
 **Wake all** (shown below the list when you have two or more devices) to wake every
 device. A notification says the wake was sent and, if the device has a status check,
-that it is checking whether the PC came up; a second notification follows if it did, or
-if it still hasn't after about 45 seconds. For about ten minutes the device's row shows
+that it is checking whether the PC came up. The plugin then checks every couple of
+seconds: "<name> is awake" pops up as soon as the PC answers (not if it was already
+awake), and if it still hasn't after about a minute, one "hasn't woken up" notification
+covers every PC that didn't. For about ten minutes the device's row shows
 how that wake went ("Wake sent 1 min ago", "Checking…", "Awake", or "Didn't wake up"),
 then goes back to its usual summary. The **⋯** button next to **Wake** opens **Edit**
 and **Delete…** (which asks before removing the device).

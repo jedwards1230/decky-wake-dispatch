@@ -28,8 +28,13 @@ Frontend (`frontend` job):
 ```bash
 pnpm install --frozen-lockfile
 pnpm typecheck
+pnpm test
 pnpm build
 ```
+
+`pnpm test` runs the frontend unit tests in `test/` with Node's built-in test runner,
+which strips the TypeScript types itself (Node 22.18 or newer), so it needs no extra
+dependencies.
 
 Backend (`backend` job):
 

@@ -11,7 +11,7 @@ jobs are required checks.
 
 | Job | Runs | Proves |
 | --- | --- | --- |
-| `frontend` | `pnpm typecheck`, `pnpm build` | the panel type-checks against `@decky/ui` / `@decky/api` and bundles to `dist/index.js` |
+| `frontend` | `pnpm typecheck`, `pnpm test`, `pnpm build` | the panel type-checks against `@decky/ui` / `@decky/api`, its unit tests pass, and it bundles to `dist/index.js` |
 | `backend` | `ruff check .`, `ruff format --check .`, `pytest -q` on Python 3.11 | lint, formatting, and the backend test suite |
 | `package` | `scripts/package.sh` plus a zip layout check | the release zip has one `wake-dispatch/` folder with `plugin.json`, `package.json`, `main.py`, `LICENSE`, `README.md`, `dist/index.js` and `py_modules/`, and no caches or source maps |
 
@@ -93,8 +93,20 @@ unloading" and no kill of the plugin process.
 
 ## Frontend
 
-There are no frontend unit tests. `pnpm typecheck` and `pnpm build` are the automated
-checks; anything visual or interactive is verified on a device.
+`pnpm test` runs the frontend unit tests in `test/` with Node's built-in runner (`node
+--test`, which strips the TypeScript types itself; no extra dependencies). Only code
+with no `@decky/*` imports can be tested this way, so logic worth testing lives in
+plain modules with its timers and backend calls injected:
+
+- `test/wakePoll.test.ts`: the fast wake confirmation in `src/wakePoll.ts`, on fake
+  timers. It covers the first poll at 1 s and then every 2 s, stopping once a device is
+  awake, the single "hasn't woken up" report at the 60 s deadline, skipping a poll while
+  the previous status call is pending, no "is awake" toast for a PC that was already
+  awake, "unknown" never counting as a failure, a newer wake taking a device over, and
+  `cancelAll`.
+
+`pnpm typecheck` covers the rest of the panel; anything visual or interactive is
+verified on a device.
 
 ## On a device
 

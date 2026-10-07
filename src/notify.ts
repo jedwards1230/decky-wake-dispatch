@@ -6,12 +6,10 @@
 // A short-lived key set makes a second toast for the same record a no-op.
 import { toaster } from "@decky/api";
 
-import { status, type Device, type DispatchRecord, type Status } from "./api";
-import { errorText, nameList, resultsWith, triggerLabel } from "./format";
+import type { Device, DispatchRecord } from "./api";
+import { nameList, resultsWith, triggerLabel } from "./format";
 import { S, TOAST, names } from "./strings";
 
-const FIRST_CHECK_MS = 20_000;
-const SECOND_CHECK_MS = 45_000;
 const SEEN_TTL_MS = 60_000;
 
 const seen = new Map<string, number>();
@@ -148,67 +146,13 @@ export function checkableDevices(record: DispatchRecord | null, devices: Device[
   );
 }
 
-function toastAwake(list: Device[]): void {
+/** "<name> is awake", as soon as a polled device answers. */
+export function toastAwake(name: string): void {
+  toast(TOAST.isAwake(name, false), TOAST.isAwakeBody);
+}
+
+/** One combined "hasn't woken up" toast at the confirmation deadline. */
+export function toastNotWoken(list: readonly string[]): void {
   if (list.length === 0) return;
-  toast(TOAST.isAwake(names(list.map((d) => d.name)), list.length > 1), TOAST.isAwakeBody);
-}
-
-export interface FollowUpHooks {
-  /** Each device's result after each check; `final` on the last check for it. */
-  onResult?: (id: string, value: Status, final: boolean) => void;
-  /** False once a newer wake owns the device: no toast for it from this follow-up. */
-  isCurrent?: (id: string) => boolean;
-}
-
-/**
- * Follow-up after a manual wake: check at ~20 s; anything still asleep is
- * checked again at ~45 s and only then reported, in one combined toast. A
- * device that comes up gets "<name> is awake", unless it was already awake
- * before the wake. "unknown" never produces a failure claim.
- */
-export function scheduleNoReplyCheck(
-  record: DispatchRecord,
-  devices: Device[],
-  before: Promise<Record<string, Status>>,
-  onChecked?: () => void,
-  hooks: FollowUpHooks = {},
-): void {
-  const { onResult, isCurrent = () => true } = hooks;
-  const checkable = checkableDevices(record, devices);
-  if (checkable.length === 0) return;
-  // Devices woken again since this wake belong to the newer follow-up.
-  const current = (list: Device[]) => list.filter((d) => isCurrent(d.id));
-
-  const check = (list: Device[]) => status(list.map((d) => d.id));
-  // A failed check is "unknown" for every device it covered: never a failure claim.
-  const fail = (list: Device[]) => (e: unknown) => {
-    console.warn("[Wake Dispatch] follow-up status check failed", errorText(e));
-    for (const d of list) onResult?.(d.id, "unknown", true);
-  };
-
-  later(() => {
-    Promise.all([before, check(checkable)])
-      .then(([prior, first]) => {
-        onChecked?.();
-        for (const d of checkable) onResult?.(d.id, first[d.id] ?? "unknown", false);
-        const wasAwake = (d: Device) => prior[d.id] === "awake";
-        toastAwake(current(checkable).filter((d) => first[d.id] === "awake" && !wasAwake(d)));
-        const pending = current(checkable).filter((d) => first[d.id] === "asleep");
-        if (pending.length === 0) return;
-        later(() => {
-          check(pending)
-            .then((second) => {
-              onChecked?.();
-              for (const d of pending) onResult?.(d.id, second[d.id] ?? "unknown", true);
-              toastAwake(current(pending).filter((d) => second[d.id] === "awake"));
-              const asleep = current(pending).filter((d) => second[d.id] === "asleep");
-              if (asleep.length > 0) {
-                toast(TOAST.notWoken(names(asleep.map((d) => d.name)), asleep.length > 1), TOAST.notWokenBody);
-              }
-            })
-            .catch(fail(pending));
-        }, SECOND_CHECK_MS - FIRST_CHECK_MS);
-      })
-      .catch(fail(checkable));
-  }, FIRST_CHECK_MS);
+  toast(TOAST.notWoken(names(list), list.length > 1), TOAST.notWokenBody);
 }

@@ -19,13 +19,15 @@ import {
   cancelPendingTimers,
   checkableDevices,
   later,
-  scheduleNoReplyCheck,
+  toastAwake,
+  toastNotWoken,
   toastDispatch,
   toastError,
   toastInfo,
   withManualWake,
 } from "./notify";
 import { S, TOAST } from "./strings";
+import { WakePoller } from "./wakePoll";
 
 export interface DevicesSnapshot {
   devices: Device[] | null; // null = not loaded yet
@@ -182,6 +184,10 @@ const wakeResultSubscribers = new Set<() => void>();
 function publishWakeResults(): void {
   for (const fn of [...wakeResultSubscribers]) fn();
 }
+
+// Polls the status of just-woken devices. Module-level, so it keeps going while
+// the Quick Access menu is closed; it only publishes through the store.
+const wakePoller = new WakePoller((ids) => status(ids), { set: setTimeout, clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) });
 
 let lastWakeToken = 0;
 
@@ -343,13 +349,22 @@ async function sendManualWake(
       if (result.status === "sent") startWakeResult(id, at, checkable.has(id) ? "checking" : "sent");
     }
     later(requestStatusRefresh, 4_000);
-    scheduleNoReplyCheck(record, devices, before, requestStatusRefresh, {
-      isCurrent: (id) => isLatestWake(id, at),
-      onResult: (id, value, final) => {
-        if (value === "awake") updateWakeResult(id, at, "awake");
-        else if (value === "unknown") updateWakeResult(id, at, "sent");
-        else if (final) updateWakeResult(id, at, "asleep");
+    // Fast confirmation: poll each checkable device from ~1 s until it answers
+    // or ~60 s pass. A newer wake of the same device takes its polling over.
+    const polled = devices.filter((d) => checkable.has(d.id)).map((d) => ({ id: d.id, name: d.name }));
+    let refreshed = false;
+    wakePoller.start(polled, before, {
+      onStatus: (id, value, final) => {
+        if (value === "awake") {
+          updateWakeResult(id, at, "awake");
+          if (!refreshed) {
+            refreshed = true;
+            requestStatusRefresh();
+          }
+        } else if (final) updateWakeResult(id, at, value === "asleep" ? "asleep" : "sent");
       },
+      onAwake: (target) => toastAwake(target.name),
+      onNotWoken: (targets) => toastNotWoken(targets.map((t) => t.name)),
     });
     return record;
   });
@@ -361,6 +376,7 @@ async function sendManualWake(
  */
 export function cancelPendingChecks(): void {
   cancelPendingTimers();
+  wakePoller.cancelAll();
   wakeResults.clear();
   wakingIds.clear();
   wakingAll = false;

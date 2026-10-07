@@ -11,6 +11,10 @@ export interface UpdateState {
   checkNote: string | null;
   /** Shown on the Check daily toggle when saving it failed. */
   toggleError: string | null;
+  /** The value being saved, shown on the toggle until the save settles. */
+  pendingEnabled: boolean | null;
+  /** Bumped when the toggle must re-read its value (an ignored or failed press). */
+  toggleKey: number;
   checkNow: () => void;
   setDaily: (on: boolean) => void;
 }
@@ -26,6 +30,8 @@ export function useUpdate(): UpdateState {
   const [checking, setChecking] = useState(false);
   const [checkNote, setCheckNote] = useState<string | null>(null);
   const [toggleError, setToggleError] = useState<string | null>(null);
+  const [pendingEnabled, setPendingEnabled] = useState<boolean | null>(null);
+  const [toggleKey, setToggleKey] = useState(0);
   const mounted = useRef(true);
   const checkingRef = useRef(false);
   const savingToggle = useRef(false);
@@ -72,14 +78,20 @@ export function useUpdate(): UpdateState {
 
   const setDaily = useCallback(
     (on: boolean) => {
-      if (savingToggle.current) return;
+      if (savingToggle.current) {
+        // Ignored: make the toggle show the value being saved again.
+        setToggleKey((k) => k + 1);
+        return;
+      }
       savingToggle.current = true;
       setToggleError(null);
+      setPendingEnabled(on);
       setUpdateCheck(on)
         .then(async (saved) => {
           if (!mounted.current) return;
           if (!saved.ok) {
             setToggleError(saved.error);
+            setToggleKey((k) => k + 1);
             return;
           }
           setInfo((prev) => (prev ? { ...prev, enabled: saved.enabled } : prev));
@@ -88,14 +100,17 @@ export function useUpdate(): UpdateState {
         })
         .catch((e: unknown) => {
           console.warn("[Wake Dispatch] set_update_check failed", e);
-          if (mounted.current) setToggleError(S.backendError);
+          if (!mounted.current) return;
+          setToggleError(S.backendError);
+          setToggleKey((k) => k + 1);
         })
         .finally(() => {
           savingToggle.current = false;
+          if (mounted.current) setPendingEnabled(null);
         });
     },
     [load],
   );
 
-  return { info, checking, checkNote, toggleError, checkNow, setDaily };
+  return { info, checking, checkNote, toggleError, pendingEnabled, toggleKey, checkNow, setDaily };
 }

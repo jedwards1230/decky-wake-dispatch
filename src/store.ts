@@ -144,7 +144,7 @@ function publishFocus(): void {
   for (const fn of [...focusSubscribers]) fn();
 }
 
-export function requestFocus(id: string): void {
+export function requestFocus(id: string, ttlMs: number = FOCUS_REQUEST_MS): void {
   const seq = ++focusSeq;
   focusRequest = { id, seq };
   publishFocus();
@@ -152,7 +152,7 @@ export function requestFocus(id: string): void {
     if (focusRequest?.seq !== seq) return;
     focusRequest = null;
     publishFocus();
-  }, FOCUS_REQUEST_MS);
+  }, ttlMs);
 }
 
 export function useFocusRequest(): FocusRequest | null {
@@ -391,8 +391,12 @@ const WINDOW_FOCUS_WAIT_MS = 120_000;
  * callback, so the Quick Access window regaining focus is the signal that it closed.
  */
 export function focusWhenWindowReturns(win: Window, id: string): void {
-  onWindowFocusOnce(win, () => requestFocus(id));
+  // Longer than a modal's request: the panel may be rebuilt and its status
+  // reloaded before the target exists again.
+  onWindowFocusOnce(win, () => requestFocus(id, RETURN_FOCUS_MS));
 }
+
+const RETURN_FOCUS_MS = 8_000;
 
 /**
  * Run `fn` the next time `win` gets window focus, once, within two minutes.

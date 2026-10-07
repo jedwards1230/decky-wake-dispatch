@@ -80,7 +80,7 @@ export function UpdateRow({ info }: { info: UpdateInfo | null }) {
   // status has loaded again: try again when it does.
   useEffect(() => {
     if (shown && focus?.id === UPDATE_FOCUS) focusSoon(() => rowRef.current, { retry: "always" });
-  }, [focus?.seq, shown]);
+  }, [focus?.seq, shown, info?.status]);
 
   if (!shown || !info?.release) return null;
   const release = info.release;
@@ -118,10 +118,21 @@ export function UpdateRow({ info }: { info: UpdateInfo | null }) {
 
 /** Updates section: where things stand, Check for updates, the Check daily toggle, the installed version. */
 export function UpdateSection({ update }: { update: UpdateState }) {
-  const { info, checking, checkNote, toggleError, checkNow, setDaily } = update;
+  const { info, checking, checkNote, toggleError, pendingEnabled, toggleKey, checkNow, setDaily } = update;
   const line = statusLine(info);
   const checkRef = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLDivElement>(null);
   const focus = useFocusRequest();
+
+  // A remounted toggle drops focus if it had it: put focus back on it.
+  useEffect(() => {
+    if (toggleKey === 0) return;
+    const doc = toggleRef.current?.ownerDocument;
+    const active = doc?.activeElement ?? null;
+    if (doc && (active === null || active === doc.body || !active.isConnected)) {
+      focusSoon(() => toggleRef.current);
+    }
+  }, [toggleKey]);
   const rowShown = info?.status === "available" && info.release !== null;
 
   // The Update row is gone (installed elsewhere, or a newer check said current):
@@ -130,7 +141,7 @@ export function UpdateSection({ update }: { update: UpdateState }) {
   const loaded = info !== null;
   useEffect(() => {
     if (loaded && !rowShown && focus?.id === UPDATE_FOCUS) focusSoon(() => checkRef.current, { retry: "always" });
-  }, [focus?.seq, loaded]);
+  }, [focus?.seq, loaded, info?.status]);
   return (
     <PanelSection title={UPDATE.title}>
       {line && (
@@ -147,12 +158,16 @@ export function UpdateSection({ update }: { update: UpdateState }) {
         </div>
       </PanelSectionRow>
       <PanelSectionRow>
-        <ToggleField
-          label={UPDATE.toggle}
-          description={hintOrError(UPDATE.toggleHint, toggleError)}
-          checked={info?.enabled ?? false}
-          onChange={setDaily}
-        />
+        <div ref={toggleRef}>
+          <ToggleField
+            label={UPDATE.toggle}
+            description={hintOrError(UPDATE.toggleHint, toggleError)}
+            // Remounted after a failed save so it can't keep showing the press.
+            key={toggleKey}
+            checked={pendingEnabled ?? info?.enabled ?? false}
+            onChange={setDaily}
+          />
+        </div>
       </PanelSectionRow>
       {info?.installed && (
         <PanelSectionRow>

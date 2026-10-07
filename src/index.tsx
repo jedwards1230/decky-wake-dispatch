@@ -6,6 +6,7 @@ import { DISPATCHED_EVENT, type DispatchRecord } from "./api";
 import { Panel } from "./components/Panel";
 import { emitDispatched } from "./events";
 import { toastDispatchEvent } from "./notify";
+import { cancelPendingChecks } from "./store";
 import { PLUGIN_NAME } from "./strings";
 
 export default definePlugin(() => {
@@ -24,6 +25,7 @@ export default definePlugin(() => {
     icon: <FaPowerOff />,
     onDismount() {
       removeEventListener(DISPATCHED_EVENT, onDispatched);
+      cancelPendingChecks();
     },
   };
 });

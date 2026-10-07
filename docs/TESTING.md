@@ -109,14 +109,27 @@ Decky Loader:
    across reinstalls.
 3. Exercise the change: add a device, wake it, and check the status and notifications.
    For automation, enable it on a device, then reboot or suspend for longer than 20
-   seconds and check the "Last automatic wake" line.
-4. For the update check, install a build whose packaged version is older than the
-   latest release (`scripts/package.sh --version 0.0.1`). Open the panel with the daily
-   check still off (the default) and confirm the backend log shows no update request;
-   press **Check for updates** and check it shows the newer version; press **Update**
+   seconds and check the "Last automatic wake" line. For panel changes, also drive it
+   with the D-pad only: focus should never vanish (after Wake, Save, Cancel, or Delete…
+   from a row's ⋯ menu, it lands on a Wake button or Add device), and Save in the device
+   editor, for both Add and Edit, should be six presses from the top with More settings
+   folded.
+4. For the network picker, open Add device → Pick from network. Press **Scan network**
+   and check the "Scanning…" state, that **Cancel scan** returns to idle, and that a
+   finished scan shows "Found N (M named)" with saved devices marked "Already added".
+   Press it again within 30 seconds and check the "Try again in N s" message. Type a
+   PC's IP address under **Find by IP or name** and press **Find**: the editor should
+   fill in its MAC address and status address; an address off this network shows the
+   backend's error under the field. Close the picker mid-scan and check the backend log
+   shows the scan cancelled.
+5. For the update check, install a build whose packaged version is older than the
+   latest release (`scripts/package.sh --version 0.0.1`). Open the panel with **Check
+   daily** still off (the default): the Updates section says "Automatic checks are off"
+   and the backend log shows no update request. Press **Check for updates** and check
+   the "Update available" row appears under the devices; press **Update** in that row
    and check Decky's own confirmation names Wake Dispatch and the new version
    (cancelling leaves the plugin installed).
-5. Read the backend log at `~/homebrew/logs/wake-dispatch/` for errors.
+6. Read the backend log at `~/homebrew/logs/wake-dispatch/` for errors.
 
 ## Avoid
 

@@ -4,8 +4,8 @@ A [Decky Loader](https://github.com/SteamDeckHomebrew/decky-loader) plugin that 
 Wake-on-LAN packets to your PCs from the Steam Quick Access menu, so the PC you stream
 from or play on is awake by the time you need it.
 
-- **Wake from the Quick Access menu**: a **Wake all** button plus a **Wake** button for
-  each device.
+- **Wake from the Quick Access menu**: a **Wake** button for each device, plus **Wake
+  all** once you have two or more.
 - **Optional automatic wakes**: per device, wake it when your handheld (or other Steam
   device) starts up, after it wakes from sleep, or both. Automation is off by default.
 - **Awake / Asleep status** next to each device, from a quick TCP port check you choose
@@ -36,11 +36,15 @@ Wake Dispatch then appears in Decky's plugin list.
 ### Updating and rolling back
 
 Decky does not tell you about updates for plugins installed from a URL, so Wake
-Dispatch can check for you. Press **Check for updates** in the panel to ask GitHub for
-the latest release right away. If you'd rather be told automatically, turn on the
-daily check (it is off until you do): then, at most once a day when you open the
-panel, it asks GitHub and shows when a new version is available. Press **Update** to
-open Decky's own install confirmation; nothing is installed until you confirm it there.
+Dispatch can check for you. The panel's **Updates** section shows the installed version
+and where things stand ("Up to date", "Update available", or "Automatic checks are off"
+until you check). Press **Check for updates** to ask GitHub for the latest release right
+away. If you'd rather be told automatically, turn on **Check daily** (it is off until you
+do): then, at most once a day when you open the panel, it asks GitHub. When a newer
+version is known, an **Update available** row appears under your devices; press
+**Update** to open Decky's own install confirmation, and nothing is installed until you
+confirm it there. If Decky's installer can't be opened, the panel shows the download URL
+to copy and paste into Decky settings → Developer → **Install Plugin from URL** instead.
 
 You can also update by hand: repeat the install steps (Decky settings → Developer →
 **Install Plugin from URL**) with the same `latest` URL; it always points at the
@@ -58,8 +62,13 @@ Your devices and settings are kept when you update, reinstall or change versions
 ## Using it
 
 Open the Quick Access menu and choose Wake Dispatch. Press **Wake** next to a device, or
-**Wake all** to wake every device. A notification tells you whether the wake was sent,
-and, if the device has a status check, whether it came up.
+**Wake all** (shown below the list when you have two or more devices) to wake every
+device. A notification says the wake was sent and, if the device has a status check,
+that it is checking whether the PC came up; a second notification follows if it did, or
+if it still hasn't after about 45 seconds. For about ten minutes the device's row shows
+how that wake went ("Wake sent 1 min ago", "Checking…", "Awake", or "Didn't wake up"),
+then goes back to its usual summary. The **⋯** button next to **Wake** opens **Edit**
+and **Delete…** (which asks before removing the device).
 
 A sent wake only means the packet left your device. Whether the PC wakes depends on how
 the PC is set up; see [Preparing a PC to be woken](#preparing-a-pc-to-be-woken).
@@ -67,64 +76,79 @@ the PC is set up; see [Preparing a PC to be woken](#preparing-a-pc-to-be-woken).
 ### Adding a device
 
 Choose **Add device**, then either pick the PC from the network or type its MAC address,
-and give it a name (for example "Gaming PC"):
+and give it a name (for example "Gaming PC"). Adding and editing use the same screen:
 
 - **Pick from network**: lists devices your Steam device has talked to recently, with
-  their names where your network provides them. Turn the PC on once so it shows up.
-  Picking a device fills in its MAC address, its address for status checks and, if you
-  haven't typed one, a name.
+  their names where your network provides them. Picking a device fills in its MAC
+  address, its address for status checks and, if you haven't typed one, a name.
+  Devices you've already added are marked **Already added**.
   If your PC isn't listed, choose **Scan network**: the plugin briefly checks every
   address on your home network so devices that haven't talked to your Steam device yet
-  show up too. It takes up to about 15 seconds and asks first if you're not on your
-  home network.
-  If you know the PC's IP address or name, choose **Find by IP or name** instead and
-  type it: the plugin checks just that one address and fills in its MAC address.
+  show up too, then shows how many it found. It usually takes about 10 seconds (at most
+  15), you can cancel it, and it asks first if you're not on your home network. Nothing
+  it finds is remembered.
+  If you know the PC's IP address or name, type it under **Find by IP or name** and
+  press **Find**: the plugin checks just that one address and fills in its MAC address.
+  Only PCs that are on can be found this way. If yours is asleep or off, wake it once by
+  hand, or type its MAC address.
 - **Type the MAC address**: any common format works, for example `aa:bb:cc:dd:ee:01`,
-  `aa-bb-cc-dd-ee-01` or `aabbccddee01`.
+  `aa-bb-cc-dd-ee-01` or `aabbccddee01`. On Windows run `getmac /v` (or open Settings →
+  Network & internet → your adapter → Hardware properties); on Linux run `ip link` and
+  use the `link/ether` value.
 
 Under **Check if it's awake**, choose how the plugin should tell whether the PC is up:
 
 | Choice | Port checked |
 | --- | --- |
-| Don't check | none; the device shows "No status check" |
+| Don't check | none; the device shows no status |
 | Game streaming (Sunshine) | TCP 47989, the port of the Sunshine game-stream host (used with Moonlight); Steam Remote Play itself is not checked |
 | SSH | TCP 22 |
 | Remote Desktop | TCP 3389 |
-| Other port | any TCP port, set under advanced settings |
+| Another port… | any TCP port, set under More settings |
 
-**Show advanced settings** has the broadcast address, the wake port (UDP 9 by default;
-some PCs listen on 7), the status check address and port, and a SecureOn password for
-the rare network card that asks for one.
+A status check needs the PC's address. Pick from network fills it in; otherwise set it
+under More settings, or Save asks you to.
+
+**More settings** (folded by default) has the status check address and port, the wake
+port (UDP 9 by default; some PCs listen on 7), the address the wake is sent to (leave it
+as is unless wakes don't arrive), and a Wake password (SecureOn) for the rare network
+card that asks for one.
 
 ### Automatic wakes
 
-In a device's settings, under **Automatic wake**:
+In a device's settings, **Wake automatically** is **Never** by default. The other
+choices are:
 
-- **When this Steam device starts up** sends a wake once each time your handheld or PC
-  running Steam boots. Restarting Decky or the plugin during the same boot does not send
+- **When this Deck starts** sends a wake once each time your handheld or PC running
+  Steam boots. Restarting Decky or the plugin during the same boot does not send
   another (unless the first attempt found no network, in which case it tries again).
-- **When this Steam device wakes from sleep** sends a wake each time it resumes from
-  sleep. Very short sleeps (under about 20 seconds) are not detected.
+- **When it wakes from sleep** sends a wake each time it resumes from sleep. Very short
+  sleeps (under about 20 seconds) are not detected.
+- **Both**.
 
 Automatic wakes wait for a network connection before sending (up to 60 seconds after
 boot, 20 seconds after resume) and send a short burst of packets over about 20 seconds
 in case the network is still settling.
 
-**Only on my home network** limits automatic wakes to the network you are on when you
-turn it on. The plugin remembers your current router's address (the default gateway)
+**Only on this network** (shown once an automatic wake is chosen) limits automatic wakes
+to the network you are on when you turn it on; its description shows the router address
+it remembered. The plugin remembers your current router's address (the default gateway)
 and, when it can see it, the router's hardware (MAC) address, and only sends automatic
 wakes when you are connected through a router that matches. If the router's hardware
 address can't be read at the time of a wake (for example just after waking from sleep),
 only its address is checked, so a different network that happens to use the same router
 address can still count as home then. When it is off, automatic wakes are sent on any
-network. If you are connected when you first enable an automatic wake, it is turned on
-for your current network automatically.
+network. The first time you choose an automatic wake for a device, **Only on this
+network** turns on by itself and records the router you are connected through right
+then (if you are connected); turn it off if you want automatic wakes on any network.
 
 Pressing **Wake** yourself always sends, whatever network you are on, as long as you are
 connected to one.
 
 The panel shows the result of the last automatic wake, for example "Last automatic wake:
-on boot, 2 min ago — sent to Gaming PC", or why it was skipped.
+on boot, 2 min ago — sent to Gaming PC", or why it was skipped. Until one has happened
+it says what comes next, for example "Automatic wake is on. Next: when this Deck starts
+or wakes from sleep."
 
 Handhelds wake from sleep often, so a resume wake can wake the PC many times a day. Each
 wake keeps the PC running, and using power, until it goes back to sleep on its own. To
@@ -134,7 +158,9 @@ home), failed or found no network doesn't start that pause.
 
 ### Backup
 
-**Export settings** shows your device list as text you can copy. **Import settings**
+Your devices are kept when you update or reinstall Wake Dispatch. **Back up or
+restore** opens **Export settings** and **Import settings**. **Export settings** shows
+your device list as text you can copy. **Import settings**
 takes that text and either merges it into your list (adding new devices and updating
 matching ones) or replaces your list. A list holds up to 64 devices, and an import can be up to
 256 KB of text. The list itself is stored in
@@ -186,13 +212,13 @@ Battery, depending on the Mac and macOS version).
   your Steam device. They do not cross subnets or VLANs, and guest Wi-Fi networks or
   access points with client isolation usually drop them. Connect both to the same
   network, or try a directed broadcast for your network (for example `192.168.1.255`)
-  as the broadcast address under advanced settings.
+  as **Send to address** under More settings.
 - **Try the other wake port.** Most PCs listen on UDP port 9; some only on 7 (**Wake
-  port** under advanced settings).
+  port** under More settings).
 - **The status says Unknown.** The status check address couldn't be looked up in time,
   or your Steam device has no route to it right now (for example it isn't on the PC's
-  network). Check the name, or use the PC's IP address under advanced settings. (A
-  device with no status check shows "No status check" instead.)
+  network). Check the name, or use the PC's IP address under More settings. (A
+  device with no status check shows no status at all.)
 - **The status says Asleep but the PC is on.** The status check shows Awake when the PC
   answers on that port at all, even to refuse the connection. Asleep means nothing
   answered within a second, which usually means a firewall on the PC silently drops

@@ -8,7 +8,7 @@ import { toaster } from "@decky/api";
 
 import { status, type Device, type DispatchRecord, type Status } from "./api";
 import { errorText, nameList, resultsWith, triggerLabel } from "./format";
-import { PLUGIN_NAME, S, TOAST, names } from "./strings";
+import { S, TOAST, names } from "./strings";
 
 const FIRST_CHECK_MS = 20_000;
 const SECOND_CHECK_MS = 45_000;
@@ -16,6 +16,26 @@ const SEEN_TTL_MS = 60_000;
 
 const seen = new Map<string, number>();
 let manualInFlight = 0;
+
+// Every pending timer, so plugin unload can cancel follow-ups instead of
+// letting them fire (and toast) into a torn-down plugin.
+const timers = new Set<ReturnType<typeof setTimeout>>();
+
+/** setTimeout that cancelPendingTimers() can cancel. */
+export function later(fn: () => void, ms: number): void {
+  const id = setTimeout(() => {
+    timers.delete(id);
+    fn();
+  }, ms);
+  timers.add(id);
+}
+
+/** Cancel every pending follow-up and forget which records were toasted. */
+export function cancelPendingTimers(): void {
+  for (const id of timers) clearTimeout(id);
+  timers.clear();
+  seen.clear();
+}
 
 function recordKey(record: DispatchRecord): string {
   return `${record.trigger}|${record.at}|${record.outcome}|${Object.keys(record.results).sort().join(",")}`;
@@ -40,17 +60,31 @@ function toast(title: string, body: string): void {
   }
 }
 
-/** Plain-language toast for a dispatch, or null when nothing is worth saying. */
-export function describeDispatch(record: DispatchRecord, note?: string): { title: string; body: string } | null {
+/**
+ * Plain-language toast for a dispatch, or null when nothing is worth saying.
+ * "Sent" never claims the PC woke: a manual wake says a status check follows
+ * (`checking`) or that starting can take a while.
+ */
+export function describeDispatch(
+  record: DispatchRecord,
+  note?: string,
+  checking = false,
+): { title: string; body: string } | null {
   const sent = resultsWith(record, "sent");
   const failed = resultsWith(record, "error");
   const auto = record.trigger !== "manual";
-  const context = auto ? TOAST.automaticContext(triggerLabel(record.trigger)) : PLUGIN_NAME;
+  const context = auto
+    ? TOAST.automaticContext(triggerLabel(record.trigger))
+    : checking
+      ? sent.length > 1
+        ? TOAST.checkingAwakeMany
+        : TOAST.checkingAwake
+      : TOAST.mayTakeAMinute;
 
   switch (record.outcome) {
     case "sent":
       return {
-        title: sent.length === 1 ? TOAST.woke(sent[0].name) : TOAST.sentTo(sent.length),
+        title: sent.length === 1 ? TOAST.sentToOne(sent[0].name) : TOAST.sentTo(sent.length),
         body: note ?? context,
       };
     case "partial":
@@ -76,9 +110,9 @@ export function describeDispatch(record: DispatchRecord, note?: string): { title
   }
 }
 
-export function toastDispatch(record: DispatchRecord, note?: string): void {
+export function toastDispatch(record: DispatchRecord, note?: string, checking = false): void {
   if (!firstSeen(record)) return;
-  const msg = describeDispatch(record, note);
+  const msg = describeDispatch(record, note, checking);
   if (msg) toast(msg.title, msg.body);
 }
 
@@ -119,6 +153,13 @@ function toastAwake(list: Device[]): void {
   toast(TOAST.isAwake(names(list.map((d) => d.name)), list.length > 1), TOAST.isAwakeBody);
 }
 
+export interface FollowUpHooks {
+  /** Each device's result after each check; `final` on the last check for it. */
+  onResult?: (id: string, value: Status, final: boolean) => void;
+  /** False once a newer wake owns the device: no toast for it from this follow-up. */
+  isCurrent?: (id: string) => boolean;
+}
+
 /**
  * Follow-up after a manual wake: check at ~20 s; anything still asleep is
  * checked again at ~45 s and only then reported, in one combined toast. A
@@ -130,34 +171,44 @@ export function scheduleNoReplyCheck(
   devices: Device[],
   before: Promise<Record<string, Status>>,
   onChecked?: () => void,
+  hooks: FollowUpHooks = {},
 ): void {
+  const { onResult, isCurrent = () => true } = hooks;
   const checkable = checkableDevices(record, devices);
   if (checkable.length === 0) return;
+  // Devices woken again since this wake belong to the newer follow-up.
+  const current = (list: Device[]) => list.filter((d) => isCurrent(d.id));
 
   const check = (list: Device[]) => status(list.map((d) => d.id));
-  const fail = (e: unknown) => console.warn("[Wake Dispatch] follow-up status check failed", errorText(e));
+  // A failed check is "unknown" for every device it covered: never a failure claim.
+  const fail = (list: Device[]) => (e: unknown) => {
+    console.warn("[Wake Dispatch] follow-up status check failed", errorText(e));
+    for (const d of list) onResult?.(d.id, "unknown", true);
+  };
 
-  setTimeout(() => {
+  later(() => {
     Promise.all([before, check(checkable)])
       .then(([prior, first]) => {
         onChecked?.();
+        for (const d of checkable) onResult?.(d.id, first[d.id] ?? "unknown", false);
         const wasAwake = (d: Device) => prior[d.id] === "awake";
-        toastAwake(checkable.filter((d) => first[d.id] === "awake" && !wasAwake(d)));
-        const pending = checkable.filter((d) => first[d.id] === "asleep");
+        toastAwake(current(checkable).filter((d) => first[d.id] === "awake" && !wasAwake(d)));
+        const pending = current(checkable).filter((d) => first[d.id] === "asleep");
         if (pending.length === 0) return;
-        setTimeout(() => {
+        later(() => {
           check(pending)
             .then((second) => {
               onChecked?.();
-              toastAwake(pending.filter((d) => second[d.id] === "awake"));
-              const asleep = pending.filter((d) => second[d.id] === "asleep");
+              for (const d of pending) onResult?.(d.id, second[d.id] ?? "unknown", true);
+              toastAwake(current(pending).filter((d) => second[d.id] === "awake"));
+              const asleep = current(pending).filter((d) => second[d.id] === "asleep");
               if (asleep.length > 0) {
                 toast(TOAST.notWoken(names(asleep.map((d) => d.name)), asleep.length > 1), TOAST.notWokenBody);
               }
             })
-            .catch(fail);
+            .catch(fail(pending));
         }, SECOND_CHECK_MS - FIRST_CHECK_MS);
       })
-      .catch(fail);
+      .catch(fail(checkable));
   }, FIRST_CHECK_MS);
 }

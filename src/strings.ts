@@ -14,52 +14,62 @@ export function names(list: readonly string[]): string {
 
 export const S = {
   wakeAll: "Wake all",
-  wakeAllNoDevices: "Add a device below to get started.",
   addDevice: "Add device",
   wake: "Wake",
   waking: "Sending…",
   wakeLabel: (name: string) => `Wake ${name}`,
-  editLabel: (name: string) => `Edit ${name}`,
-  deleteLabel: (name: string) => `Delete ${name}`,
+  wakingLabel: (name: string) => `Sending wake to ${name}`,
+  moreLabel: (name: string) => `More options for ${name}`,
   wakeAllLabel: "Wake all devices",
-  statusLabel: (name: string, state: string) => `${name}: ${state}`,
   edit: "Edit",
-  delete: "Delete",
   devicesTitle: "Devices",
   backupTitle: "Backup",
-  exportSettings: "Export settings",
-  importSettings: "Import settings",
+  backupEntry: "Back up or restore",
   loading: "Loading devices…",
   loadFailed: "Couldn't load your devices. Choose Try again, or restart Decky Loader.",
   tryAgain: "Try again",
 
-  emptyTitle: "No devices yet",
-  emptyBody:
-    "Choose \"Add device\" and pick your PC from the network list, or type its MAC address.",
+  emptyTitle: "Add the PC you want to wake",
+  emptySteps: [
+    "Turn the PC on, on the same network as this Deck.",
+    "Choose Add device, then Pick from network.",
+    "Put the PC to sleep and press Wake to test it.",
+  ],
   emptyWolHint:
-    "The PC needs Wake-on-LAN turned on in its BIOS/UEFI and in its network adapter settings, and usually a wired connection.",
+    "The PC needs Wake-on-LAN turned on in its BIOS/UEFI and network adapter, and usually a wired connection.",
 
   status: {
     awake: "Awake",
     asleep: "Asleep",
     unknown: "Unknown",
     checking: "Checking…",
-    none: "No status check",
   },
 
   deleteTitle: (name: string) => `Delete ${name}?`,
   deleteBody: "This removes it from Wake Dispatch. Nothing on the PC is changed.",
+  delete: "Delete",
+  deleteEllipsis: "Delete…",
+  cancel: "Cancel",
   deleteFailed: "Couldn't delete the device",
-
-  noAutomaticYet: "No automatic wakes yet.",
 
   backendError: "The plugin's background service didn't answer. Try again, or restart Decky Loader.",
 };
 
+/** Per-device result of the last manual wake, shown in the row for a few minutes. */
+export const ROW = {
+  sent: (ago: string) => `Wake sent ${ago}`,
+  checking: "Checking…",
+  awake: "Awake",
+  notWoken: "Didn't wake up. Check Wake-on-LAN on the PC.",
+};
+
 export const TOAST = {
-  woke: (name: string) => `Woke ${name}`,
-  sentTo: (n: number) => `Sent wake to ${n} devices`,
-  sentSome: (sent: number, total: number) => `Sent wake to ${sent} of ${total} devices`,
+  sentToOne: (name: string) => `Wake sent to ${name}`,
+  sentTo: (n: number) => `Wake sent to ${n} devices`,
+  sentSome: (sent: number, total: number) => `Wake sent to ${sent} of ${total} devices`,
+  checkingAwake: "Checking if it's awake…",
+  checkingAwakeMany: "Checking if they're awake…",
+  mayTakeAMinute: "It may take up to a minute to start.",
   couldntSendTo: (who: string, error?: string) => `Couldn't send to ${who}${error ? `: ${error}` : ""}`,
   couldntWake: (name: string) => `Couldn't wake ${name}`,
   couldntSend: "Couldn't send the wake",
@@ -82,9 +92,9 @@ export const TOAST = {
 
 export const AUTOMATION = {
   manual: "Manual only",
-  boot: "Wakes on boot",
-  resume: "Wakes on resume",
-  both: "Wakes on boot and resume",
+  boot: "Wakes when this Deck starts",
+  resume: "Wakes when this Deck wakes from sleep",
+  both: "Wakes when this Deck starts or wakes from sleep",
 };
 
 export const LAST = {
@@ -97,6 +107,10 @@ export const LAST = {
   noNetwork: "no network connection",
   nothingToWake: "nothing to wake",
   unknownError: "couldn't send",
+  onNext: (next: string) => `Automatic wake is on. Next: ${next}.`,
+  nextBoot: "when this Deck starts",
+  nextResume: "when this Deck wakes from sleep",
+  nextBoth: "when this Deck starts or wakes from sleep",
 };
 
 export const EDITOR = {
@@ -105,57 +119,53 @@ export const EDITOR = {
   name: "Name",
   nameRequired: "Give this device a name.",
   mac: "MAC address",
-  macHint: "Any format works, for example aa:bb:cc:dd:ee:01, aa-bb-cc-dd-ee-01 or aabbccddee01.",
+  macHelp:
+    "Don't know it? Turn the PC on and use Pick from network. On Windows run getmac /v; on Linux, the link/ether line of ip link.",
+  macBadChar: (ch: string) => `A MAC address uses only 0–9 and A–F (found "${ch}").`,
   macRequired: "Enter the PC's MAC address, or pick it from the network.",
   macCheckFailed: "Couldn't check the MAC address right now. Try Save again.",
   pickFromNetwork: "Pick from network",
-  orTypeMac: "Or type the MAC address below.",
-  foundAtChooseCheck: (ip: string) => `Found at ${ip}. Choose how to check if it's awake below.`,
-  foundAt: (ip: string) => `Found at ${ip}. Status checks will use this address.`,
+  foundAt: (ip: string) => `Found at ${ip}.`,
   pcAt: (ip: string) => `PC at ${ip}`,
 
   checkLabel: "Check if it's awake",
   checkNone: "Don't check",
-  checkSunshine: "Game streaming (Sunshine, 47989)",
-  checkSsh: "SSH (22)",
-  checkRdp: "Remote Desktop (3389)",
-  checkOther: "Other port (set in Advanced)",
+  checkSunshine: "Game streaming (Sunshine)",
+  checkSsh: "SSH",
+  checkRdp: "Remote Desktop",
+  checkOther: "Another port…",
   checkHint: "Shows Awake or Asleep next to the device.",
-  checkNeedsHost: "Needs the PC's address: use Pick from network, or set it under Advanced.",
+  checkOtherHint: "Set the port under More settings.",
+  checkNeedsHost: "Pick the PC from the network, or turn this off.",
 
-  automationTitle: "Automatic wake",
-  automationHint: "Off by default. Wakes are always sent when you press Wake.",
-  onBoot: "When this Steam device starts up",
-  onBootHint: "Sends a wake once each time this handheld or PC running Steam boots.",
-  onResume: "When this Steam device wakes from sleep",
-  onResumeHint: "Handhelds wake from sleep often, so this can send many wakes a day.",
-  homeOnly: "Only on my home network",
+  autoLabel: "Wake automatically",
+  autoHint: "Pressing Wake always sends, whatever this is set to.",
+  autoNever: "Never",
+  autoBoot: "When this Deck starts",
+  autoResume: "When it wakes from sleep",
+  autoBoth: "Both",
+  autoResumeHint: "Handhelds wake from sleep often, so this can wake the PC many times a day.",
+  homeOnly: "Only on this network",
   homeOnlyOff: "Off: automatic wakes are sent on any network.",
   homeOnlyOn: (gw: string) =>
-    `Only when connected through router ${gw} (your current network). The router's hardware address is checked too when it's known.`,
-  homeOnlyAutoOn: "Turned on for your current network. Turn off to wake on any network.",
-  homeOnlyNeedsTrigger: "Turn on an automatic wake first.",
+    `Home network: router ${gw}. The router's hardware address is checked too when it's known.`,
   homeOnlyNoNetwork: "Not connected to a network right now. Connect to your home network, then turn this on.",
   homeOnlyFailed: "Couldn't read the current network. Try again in a moment.",
 
-  showAdvanced: "Show advanced settings",
-  hideAdvanced: "Hide advanced settings",
-  broadcast: "Broadcast address",
-  broadcastHint:
-    "Leave as 255.255.255.255 unless the wake doesn't arrive. A directed broadcast for your network, such as 192.168.1.255, can help.",
+  moreSettings: "More settings",
+  broadcast: "Send to address",
+  broadcastHint: "Leave as is unless wakes don't arrive.",
   port: "Wake port (UDP)",
   portHint: "Usually 9. Some PCs listen on 7.",
   portInvalid: "Use a number from 1 to 65535.",
   statusHost: "Status check address",
-  statusHostHint: "IP address or hostname of the PC, for example 192.168.1.20. Used only to show Awake/Asleep.",
+  statusHostHint: "The PC's IP address or hostname, for example 192.168.1.20. Used only for Awake/Asleep.",
   statusPort: "Status check port (TCP)",
-  statusPortHint: "47989 for Sunshine, 22 for SSH, 3389 for Remote Desktop. Leave empty to skip the check.",
-  secureon: "SecureOn password",
+  statusPortHint: "Leave empty to skip the check.",
+  secureon: "Wake password (SecureOn) — rarely needed",
   secureonHint: "Only if your network card asks for one. Six bytes, written like a MAC address.",
 
-  fixName: "Give this device a name (at the top).",
-  fixMac: "Check the MAC address above.",
-  fixFields: "Check the highlighted fields above.",
+  fixFields: "Check the highlighted field.",
 
   discardTitle: "Discard changes?",
   discardBody: "Your changes to this device haven't been saved.",
@@ -170,20 +180,43 @@ export const EDITOR = {
 
 export const PICKER = {
   title: "Pick from network",
-  intro: "Devices this Steam device has talked to recently. Turn the PC on once so it shows up here.",
+  intro: "Devices this Deck has talked to recently. Turn the PC on once so it shows up here.",
   loading: "Looking for devices…",
-  empty:
-    "No devices found. Make sure the PC is on and connected, then refresh, or type the MAC address instead.",
-  failed: "Couldn't read the network list. Try refresh, or type the MAC address instead.",
+  empty: "No PCs found. Turn the PC on, make sure it's on the same network, then Scan network.",
+  asleepHint: "A PC that's asleep or off can't be found. Wake it once by hand, or type its MAC address instead.",
+  macHowTo:
+    "Finding the MAC: on Windows run getmac /v, or open Settings → Network & internet → your adapter → Hardware properties. On Linux run ip link and use the link/ether line.",
+  failed: "Couldn't read the network list. Try Refresh or Scan network, or type the MAC address instead.",
   router: "(your router)",
+  alreadyAdded: "Already added",
   refresh: "Refresh",
   cancel: "Cancel",
+
+  scan: "Scan network",
+  scanHint: "Takes about 10 seconds. Finds PCs that are on right now.",
+  scanning: "Scanning…",
+  cancelScan: "Cancel scan",
+  scanFound: (found: number, named: number) => `Found ${found} (${named} named)`,
+  scanBusy: "A scan is already running. Wait for it to finish.",
+  scanRetryIn: (seconds: number) => `Try again in ${seconds} s`,
+  awayTitle: "Scan this network?",
+  awayBody: "This doesn't look like your home network. Scan it anyway?",
+  awayOk: "Scan",
+
+  find: "Find by IP or name",
+  findHint: "Type the PC's IP address or hostname, for example 192.168.1.20.",
+  findButton: "Find",
+  finding: "Finding…",
+  findEmpty: "Type an IP address or a name first.",
 };
 
 export const BACKUP = {
+  title: "Back up or restore",
+  intro: "Your devices are kept when you update or reinstall Wake Dispatch.",
+  introMore: "To copy them to another device, or keep a copy, export them as text and import it there.",
   exportTitle: "Export settings",
   exportIntro:
-    "Your devices are stored in Wake Dispatch's devices.json in Decky's settings folder. Back that file up in Desktop Mode, or copy this text and paste it into Import on another device.",
+    "Copy this text and paste it into Import on another device. The list is also stored in Wake Dispatch's devices.json in Decky's settings folder.",
   exportLoading: "Preparing…",
   exportFailed: "Couldn't read your settings. Try again, or restart Decky Loader.",
   exportField: "Settings text",
@@ -229,4 +262,11 @@ export const UPDATE = {
     "Off by default. When on, asks GitHub for the latest release at most once a day, when you open this panel. Nothing is installed without your confirmation.",
   manual: "Install from URL: Decky settings → Developer → Install Plugin from URL, then paste:",
   installFailed: "Couldn't open Decky's installer. Install from the URL below instead.",
+  autoOff: "Automatic checks are off",
+  notChecked: "Not checked yet",
+  unavailableWith: (error: string) => `Update check unavailable: ${error}`,
+  manualTitle: "Update Wake Dispatch",
+  manualField: "Download URL",
+  manualFieldHint: "Read-only. Use the copy button to copy it.",
+  close: "Close",
 };

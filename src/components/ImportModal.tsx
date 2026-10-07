@@ -1,6 +1,8 @@
 import {
   ConfirmModal,
-  DialogButton,
+  DialogBodyText,
+  DialogButtonPrimary,
+  DialogButtonSecondary,
   DialogFooter,
   DialogHeader,
   Focusable,
@@ -89,7 +91,7 @@ export function ImportModal({ closeModal }: { closeModal?: () => void }) {
   return (
     <ModalRoot onCancel={closeModal} closeModal={closeModal}>
       <DialogHeader>{BACKUP.importTitle}</DialogHeader>
-      <div style={{ fontSize: "13px", marginBottom: "8px" }}>{BACKUP.importIntro}</div>
+      <DialogBodyText style={{ marginBottom: "8px" }}>{BACKUP.importIntro}</DialogBodyText>
       <TextField
         label={BACKUP.importField}
         value={text}
@@ -112,8 +114,8 @@ export function ImportModal({ closeModal }: { closeModal?: () => void }) {
       )}
       <DialogFooter>
         <Focusable flow-children="horizontal" style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-          <DialogButton onClick={closeModal}>{BACKUP.cancel}</DialogButton>
-          <DialogButton onClick={() => void submit()}>{busy ? BACKUP.importing : BACKUP.importButton}</DialogButton>
+          <DialogButtonPrimary onClick={() => void submit()}>{busy ? BACKUP.importing : BACKUP.importButton}</DialogButtonPrimary>
+          <DialogButtonSecondary onClick={closeModal}>{BACKUP.cancel}</DialogButtonSecondary>
         </Focusable>
       </DialogFooter>
     </ModalRoot>

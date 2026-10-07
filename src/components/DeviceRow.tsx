@@ -1,63 +1,157 @@
-import { ConfirmModal, DialogButton, Focusable, showModal } from "@decky/ui";
+import { DialogButton, Field, Focusable, Menu, MenuItem, NavEntryPositionPreferences, showContextMenu } from "@decky/ui";
+import { useEffect, useRef } from "react";
+import { FaEllipsisH } from "react-icons/fa";
 
 import type { Device, Status } from "../api";
-import { automationSummary } from "../format";
-import { deleteDevice, useWaking, wakeManual } from "../store";
-import { S } from "../strings";
+import { automationSummary, relativeTime } from "../format";
+import { WAKE_RESULT_MS, requestFocus, useFocusRequest, useWakeResult, useWaking, wakeManual, type WakeResult } from "../store";
+import { ROW, S } from "../strings";
 import { AccessibleText } from "./AccessibleText";
-import { DeviceEditor } from "./DeviceEditor";
-import { StatusBadge } from "./StatusBadge";
+import { confirmDeleteDevice, openDeviceEditor } from "./DeviceEditor";
+import { focusSoon } from "./focus";
+import { StatusDot } from "./StatusBadge";
 
-const BUTTON_STYLE = {
-  position: "relative",
-  minWidth: 0,
-  padding: "6px 8px",
-  flex: 1,
-  whiteSpace: "nowrap",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-} as const;
+// Fixed width so swapping "Wake" for "Sending…" never resizes the row.
+const WAKE_STYLE = { minWidth: 0, width: "84px", padding: 0, whiteSpace: "nowrap" } as const;
+const MORE_STYLE = { minWidth: 0, width: "40px", padding: 0, display: "flex", alignItems: "center", justifyContent: "center" } as const;
 
-function confirmDelete(device: Device) {
-  showModal(
-    <ConfirmModal
-      strTitle={S.deleteTitle(device.name)}
-      strDescription={S.deleteBody}
-      strOKButtonText={S.delete}
-      bDestructiveWarning
-      onOK={() => void deleteDevice(device.id)}
-    />,
+function resultText(result: WakeResult, now: number): string {
+  switch (result.phase) {
+    case "checking":
+      return ROW.checking;
+    case "awake":
+      return ROW.awake;
+    case "asleep":
+      return ROW.notWoken;
+    case "sent":
+    default:
+      return ROW.sent(relativeTime(result.at / 1000, now));
+  }
+}
+
+/** Marks a row's ⋯ wrapper so focus can find it again after the panel re-renders. */
+const MORE_ATTR = "data-wake-dispatch-more";
+
+/**
+ * The row's ⋯ menu: Edit and Delete…. Cancelling it (B or Cancel) puts focus
+ * back on ⋯: the menu opens outside the Quick Access panel, and when it closes
+ * the panel's buttons are rebuilt and Steam hands focus to the row's first
+ * button (Wake) or to nothing. The ⋯ is looked up again by device id, since the
+ * one that was pressed may be gone by then. After a delete, focus moves to the
+ * neighbouring row's Wake, else Add device; after Edit, the editor restores it.
+ */
+function showRowMenu(device: Device, from: HTMLElement | null): void {
+  const doc = from?.ownerDocument ?? null;
+  const win = doc?.defaultView ?? null;
+  const findMore = () => doc?.querySelector<HTMLElement>(`[${MORE_ATTR}="${CSS.escape(device.id)}"]`) ?? null;
+  let picked = false;
+  const refocus = () => {
+    win?.removeEventListener("focus", refocus);
+    if (!picked) focusSoon(findMore, { retry: "always" });
+  };
+  // The panel's window regains focus when the menu closes, however it closed.
+  win?.addEventListener("focus", refocus);
+  const choose = (action: () => void) => () => {
+    picked = true;
+    win?.removeEventListener("focus", refocus);
+    action();
+  };
+  showContextMenu(
+    <Menu label={device.name} cancelText={S.cancel} onCancel={refocus}>
+      <MenuItem onClick={choose(() => openDeviceEditor(device))}>{S.edit}</MenuItem>
+      <MenuItem tone="destructive" onClick={choose(() => confirmDeleteDevice(device, requestFocus))}>
+        {S.deleteEllipsis}
+      </MenuItem>
+    </Menu>,
+    from ?? undefined,
   );
 }
 
-/** Name + status text, automation summary, then Wake / Edit / Delete (D-pad left/right between them). */
-export function DeviceRow({ device, status }: { device: Device; status: Status | undefined }) {
-  const waking = useWaking().isWaking(device.id);
-  const hasStatusCheck = Boolean(device.host) && device.status_port !== null;
+/** While a recent result shows, the dot follows it rather than the live poll. */
+function dotForResult(result: WakeResult, live: Status | "checking"): Status | "checking" {
+  switch (result.phase) {
+    case "checking":
+      return "checking";
+    case "awake":
+      return "awake";
+    case "asleep":
+      return "asleep";
+    case "sent":
+    default:
+      return live;
+  }
+}
 
-  // wakeManual ignores a second press while this device's wake is in flight.
+interface Props {
+  device: Device;
+  status: Status | undefined;
+  now: number;
+}
+
+/**
+ * Steam-style row: the name, a description with the status in words (the dot is
+ * decorative) and the automation summary, or for ~10 min after a manual wake
+ * what that wake did. Wake and a ⋯ menu (Edit, Delete…) sit on the right; D-pad
+ * left/right moves between them.
+ */
+export function DeviceRow({ device, status, now }: Props) {
+  const waking = useWaking().isWaking(device.id);
+  const result = useWakeResult(device.id);
+  const focus = useFocusRequest();
+  const wakeRef = useRef<HTMLDivElement>(null);
+  const moreRef = useRef<HTMLDivElement>(null);
+  const hasStatusCheck = Boolean(device.host) && device.status_port !== null;
+  const wantsFocus = focus?.id === device.id;
+
+  useEffect(() => {
+    if (wantsFocus) focusSoon(() => wakeRef.current, { retry: "always" });
+    // Once per request (seq), not on every re-render while it is the latest one.
+  }, [focus?.seq]);
+
+  // Never disable the button while sending: it may hold focus, and a disabled
+  // button drops it. wakeManual ignores a second press while this wake is in flight.
   const onWake = () => void wakeManual([device.id]);
 
+  const recent = result && now - result.at < WAKE_RESULT_MS ? result : null;
+  const live: Status | "checking" = status ?? "checking";
+  const parts = recent
+    ? [resultText(recent, now)]
+    : [...(hasStatusCheck ? [S.status[live]] : []), automationSummary(device.auto)];
+
+  const description = (
+    <span>
+      {hasStatusCheck && <StatusDot value={recent ? dotForResult(recent, live) : live} />}
+      {parts.join(" · ")}
+    </span>
+  );
+
   return (
-    <div style={{ width: "100%" }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px" }}>
-        <span title={device.name} style={{ fontWeight: "bold", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+    <Field
+      label={
+        <span title={device.name} style={{ overflowWrap: "anywhere" }}>
           {device.name}
         </span>
-        <StatusBadge name={device.name} value={hasStatusCheck ? status : "none"} />
-      </div>
-      <div style={{ fontSize: "12px", opacity: 0.75, margin: "2px 0 6px" }}>{automationSummary(device.auto)}</div>
-      <Focusable flow-children="horizontal" style={{ display: "flex", gap: "6px" }}>
-        <DialogButton style={{ ...BUTTON_STYLE, flex: 2 }} disabled={waking} onClick={onWake}>
-          <AccessibleText visible={waking ? S.waking : S.wake} label={waking ? `${S.waking} ${device.name}` : S.wakeLabel(device.name)} />
+      }
+      description={description}
+      bottomSeparator="standard"
+      childrenContainerWidth="min"
+      inlineWrap="keep-inline"
+      focusable={false}
+    >
+      <Focusable
+        flow-children="horizontal"
+        navEntryPreferPosition={NavEntryPositionPreferences.FIRST}
+        style={{ display: "flex", gap: "6px" }}
+      >
+        <DialogButton ref={wakeRef} style={WAKE_STYLE} preferredFocus={wantsFocus} onClick={onWake}>
+          <AccessibleText visible={waking ? S.waking : S.wake} label={waking ? S.wakingLabel(device.name) : S.wakeLabel(device.name)} />
         </DialogButton>
-        <DialogButton style={BUTTON_STYLE} onClick={() => showModal(<DeviceEditor device={device} />)}>
-          <AccessibleText visible={S.edit} label={S.editLabel(device.name)} />
-        </DialogButton>
-        <DialogButton style={BUTTON_STYLE} onClick={() => confirmDelete(device)}>
-          <AccessibleText visible={S.delete} label={S.deleteLabel(device.name)} />
-        </DialogButton>
+        <div ref={moreRef} {...{ [MORE_ATTR]: device.id }} style={{ display: "contents" }}>
+          <DialogButton style={MORE_STYLE} onClick={() => showRowMenu(device, moreRef.current)}>
+            <AccessibleText visible={<FaEllipsisH size={14} />} label={S.moreLabel(device.name)} />
+          </DialogButton>
+        </div>
       </Focusable>
-    </div>
+    </Field>
   );
 }

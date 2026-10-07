@@ -1,4 +1,4 @@
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 
 // Visually hidden but read by screen readers.
 const SR_ONLY: CSSProperties = {
@@ -14,11 +14,11 @@ const SR_ONLY: CSSProperties = {
 };
 
 /**
- * Short visible text with a fuller accessible name, e.g. "Wake" on screen read
- * as "Wake Gaming PC". The @decky/ui button components don't type or forward
+ * Short visible text (or an icon) with a fuller accessible name, e.g. "Wake" on
+ * screen read as "Wake Gaming PC". The @decky/ui button components don't type or forward
  * aria-label, so the name travels in the button's content instead.
  */
-export function AccessibleText({ visible, label }: { visible: string; label: string }) {
+export function AccessibleText({ visible, label }: { visible: ReactNode; label: string }) {
   return (
     <>
       <span aria-hidden="true">{visible}</span>

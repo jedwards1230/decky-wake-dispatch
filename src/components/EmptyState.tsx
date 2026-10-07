@@ -1,11 +1,25 @@
+import { Field } from "@decky/ui";
+
 import { S } from "../strings";
 
+/** First run: what to do, in three steps, with the Wake-on-LAN prerequisite as a footnote. */
 export function EmptyState() {
   return (
-    <div style={{ fontSize: "13px", lineHeight: 1.4 }}>
-      <div style={{ fontWeight: "bold", marginBottom: "4px" }}>{S.emptyTitle}</div>
-      <div style={{ marginBottom: "4px" }}>{S.emptyBody}</div>
-      <div style={{ opacity: 0.75 }}>{S.emptyWolHint}</div>
-    </div>
+    <>
+      <Field
+        label={S.emptyTitle}
+        description={
+          <ol style={{ margin: "4px 0 0", paddingLeft: "20px" }}>
+            {S.emptySteps.map((step) => (
+              <li key={step}>{step}</li>
+            ))}
+          </ol>
+        }
+        childrenLayout="below"
+        bottomSeparator="none"
+        focusable={false}
+      />
+      <Field description={<span style={{ opacity: 0.7 }}>{S.emptyWolHint}</span>} bottomSeparator="none" focusable={false} />
+    </>
   );
 }

@@ -1,17 +1,25 @@
-import { lastAutomationLine } from "../format";
-import { useLastAutomation, useTick } from "../hooks/useAutomationState";
-import { S } from "../strings";
+import { Field } from "@decky/ui";
+
+import type { Device } from "../api";
+import { automationNextLine, isRelevantAutomation, lastAutomationLine } from "../format";
+import { useAutomationRecords } from "../hooks/useAutomationState";
 
 /**
- * "Last automatic wake: on boot, 2 min ago — sent to Gaming PC". The panel only
- * mounts this when at least one device has automation enabled.
+ * "Last automatic wake: on boot, 2 min ago — sent to Gaming PC", or, before any
+ * automatic wake that concerns the current setup, what happens next. Records
+ * from before automation was switched on are not shown. The panel only mounts
+ * this when at least one device has automation enabled.
  */
-export function LastDispatch() {
-  const last = useLastAutomation();
-  const now = useTick(30_000);
+export function LastDispatch({ devices, now }: { devices: readonly Device[]; now: number }) {
+  const records = useAutomationRecords();
+  const last = records
+    .filter((r) => isRelevantAutomation(r, devices))
+    .reduce<(typeof records)[number] | null>((best, r) => (best && best.at >= r.at ? best : r), null);
   return (
-    <div style={{ fontSize: "12px", opacity: 0.75, lineHeight: 1.4 }}>
-      {last ? lastAutomationLine(last, now) : S.noAutomaticYet}
-    </div>
+    <Field
+      description={last ? lastAutomationLine(last, now) : automationNextLine(devices)}
+      bottomSeparator="none"
+      focusable={false}
+    />
   );
 }

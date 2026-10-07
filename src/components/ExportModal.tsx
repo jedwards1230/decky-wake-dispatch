@@ -1,7 +1,9 @@
 import {
-  DialogButton,
+  DialogBodyText,
+  DialogButtonSecondary,
   DialogFooter,
   DialogHeader,
+  Field,
   Focusable,
   ModalRoot,
   ScrollPanelGroup,
@@ -53,7 +55,7 @@ export function ExportModal({ closeModal }: { closeModal?: () => void }) {
         </div>
       ) : (
         <>
-          <div style={{ fontSize: "13px", marginBottom: "8px" }}>{BACKUP.exportIntro}</div>
+          <DialogBodyText style={{ marginBottom: "8px" }}>{BACKUP.exportIntro}</DialogBodyText>
           {/*
             Read-only: edits are ignored. Not `disabled`, because whether Steam
             still renders the copy action on a disabled field is unverified.
@@ -67,26 +69,18 @@ export function ExportModal({ closeModal }: { closeModal?: () => void }) {
           />
           <div style={{ maxHeight: "40vh", overflowY: "auto", display: "flex", flexDirection: "column", marginTop: "8px" }}>
             <ScrollPanelGroup>
-              <pre
-                style={{
-                  fontSize: "11px",
-                  whiteSpace: "pre-wrap",
-                  wordBreak: "break-all",
-                  background: "rgba(0, 0, 0, 0.25)",
-                  padding: "8px",
-                  borderRadius: "4px",
-                  margin: 0,
-                }}
-              >
-                {text}
-              </pre>
+              <Field
+                description={<pre style={{ whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0 }}>{text}</pre>}
+                bottomSeparator="none"
+                focusable={false}
+              />
             </ScrollPanelGroup>
           </div>
         </>
       )}
       <DialogFooter>
         <Focusable style={{ display: "flex", marginTop: "12px" }}>
-          <DialogButton onClick={closeModal}>{BACKUP.close}</DialogButton>
+          <DialogButtonSecondary onClick={closeModal}>{BACKUP.close}</DialogButtonSecondary>
         </Focusable>
       </DialogFooter>
     </ModalRoot>

@@ -1,7 +1,7 @@
-import type { AutoTrigger, DeviceResult, DispatchRecord, Trigger } from "./api";
+import type { AutoTrigger, Device, DeviceResult, DispatchRecord, Trigger } from "./api";
 import { AUTOMATION, LAST, names } from "./strings";
 
-/** "Manual only" / "Wakes on boot" / "Wakes on resume" / "Wakes on boot and resume". */
+/** "Manual only" or which automatic wakes the device has. */
 export function automationSummary(auto: readonly AutoTrigger[]): string {
   const boot = auto.includes("boot");
   const resume = auto.includes("resume");
@@ -75,4 +75,36 @@ export function lastAutomationLine(record: DispatchRecord, nowMs: number = Date.
 export function errorText(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+/**
+ * Whether an automatic record still says something about the current setup: it
+ * touched a device that has that trigger enabled now (or, for "no network", any
+ * device has that trigger on). The panel can't know when automation was turned
+ * on, so this is a proxy: it hides records such as "no devices opted in" from
+ * before then, but a no-network record from before enabling still shows.
+ */
+export function isRelevantAutomation(record: DispatchRecord, devices: readonly Device[]): boolean {
+  if (record.trigger === "manual") return false;
+  const trigger = record.trigger;
+  const enabled = devices.filter((d) => d.auto.includes(trigger));
+  if (enabled.length === 0) return false;
+  if (record.outcome === "no_network") return true;
+  return enabled.some((d) => d.id in record.results);
+}
+
+/** "Automatic wake is on. Next: when this Deck starts or wakes from sleep." */
+export function automationNextLine(devices: readonly Device[]): string {
+  const boot = devices.some((d) => d.auto.includes("boot"));
+  const resume = devices.some((d) => d.auto.includes("resume"));
+  return LAST.onNext(boot && resume ? LAST.nextBoth : boot ? LAST.nextBoot : LAST.nextResume);
+}
+
+/** The first character a MAC address can't contain, or null. Separators : - . and spaces are fine. */
+export function badMacChar(text: string): string | null {
+  for (const ch of text.trim()) {
+    if (/[0-9a-fA-F:\-. ]/.test(ch)) continue;
+    return ch;
+  }
+  return null;
 }

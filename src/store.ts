@@ -13,9 +13,12 @@ import {
   type DispatchRecord,
   type Saved,
   type Status,
+  type UpdateInfo,
 } from "./api";
 import {
+  cancelPendingTimers,
   checkableDevices,
+  later,
   scheduleNoReplyCheck,
   toastDispatch,
   toastError,
@@ -73,8 +76,11 @@ export function onStatusRefreshRequested(fn: () => void): () => void {
   };
 }
 
-/** A save result plus whether a validation error points at the edited device. */
-export type SaveOutcome = Saved & { atEdited?: boolean };
+/**
+ * A save result plus whether a validation error points at the edited device, and
+ * on success the id of the saved device (new devices get theirs from the backend).
+ */
+export type SaveOutcome = Saved & { atEdited?: boolean; savedId?: string };
 
 async function writeList(list: Partial<Device>[], editedIndex?: number): Promise<SaveOutcome> {
   const saved = await saveDevices(list);
@@ -95,21 +101,139 @@ export async function saveDevice(draft: Partial<Device>): Promise<SaveOutcome> {
     // A draft without home_gateway_mac lets the backend keep or capture it
     // (docs/CONTRACT.md §4); the saved value must not ride along unasked.
     if (!("home_gateway_mac" in draft)) delete list[index].home_gateway_mac;
-    return writeList(list, index);
+    const result = await writeList(list, index);
+    return result.ok ? { ...result, savedId: draft.id } : result;
   }
   list.push({ ...draft, id: "" });
-  return writeList(list, list.length - 1);
+  const result = await writeList(list, list.length - 1);
+  if (!result.ok) return result;
+  const before = new Set(current.map((d) => d.id));
+  const added = result.devices.find((d) => !before.has(d.id)) ?? result.devices[result.devices.length - 1];
+  return { ...result, savedId: added?.id };
 }
 
-/** Remove one device. Toasts on failure. */
-export async function deleteDevice(id: string): Promise<void> {
+/** The row that should take focus once `id` is gone: the next one, else the previous one. */
+export function neighbourOf(id: string): string | null {
+  const list = snapshot.devices ?? [];
+  const i = list.findIndex((d) => d.id === id);
+  if (i < 0) return null;
+  return list[i + 1]?.id ?? list[i - 1]?.id ?? null;
+}
+
+// Where focus should land after a modal closes: a device id (its Wake button) or
+// ADD_DEVICE_FOCUS. The sequence number makes a repeat request for the same id fire again.
+export const ADD_DEVICE_FOCUS = "__add_device__";
+/** The Update button, or Check for updates when the Update row is gone. */
+export const UPDATE_FOCUS = "__update__";
+
+export interface FocusRequest {
+  id: string;
+  seq: number;
+}
+
+let focusRequest: FocusRequest | null = null;
+const focusSubscribers = new Set<() => void>();
+
+// A request only means "right after this modal closes": it expires, so reopening
+// the Quick Access menu later starts from Steam's usual first focus again and
+// preferredFocus doesn't stick to the last-edited row.
+const FOCUS_REQUEST_MS = 2_000;
+let focusSeq = 0;
+
+function publishFocus(): void {
+  for (const fn of [...focusSubscribers]) fn();
+}
+
+export function requestFocus(id: string, ttlMs: number = FOCUS_REQUEST_MS): void {
+  const seq = ++focusSeq;
+  focusRequest = { id, seq };
+  publishFocus();
+  later(() => {
+    if (focusRequest?.seq !== seq) return;
+    focusRequest = null;
+    publishFocus();
+  }, ttlMs);
+}
+
+export function useFocusRequest(): FocusRequest | null {
+  const [state, setState] = useState(focusRequest);
+  useEffect(() => {
+    const update = () => setState(focusRequest);
+    focusSubscribers.add(update);
+    update();
+    return () => {
+      focusSubscribers.delete(update);
+    };
+  }, []);
+  return state;
+}
+
+// Per-device outcome of the last manual wake, shown in the row for a while.
+export type WakeResultPhase = "sent" | "checking" | "awake" | "asleep";
+export interface WakeResult {
+  at: number; // ms, when the wake was sent
+  phase: WakeResultPhase;
+}
+export const WAKE_RESULT_MS = 10 * 60_000;
+
+const wakeResults = new Map<string, WakeResult>();
+const wakeResultSubscribers = new Set<() => void>();
+
+function publishWakeResults(): void {
+  for (const fn of [...wakeResultSubscribers]) fn();
+}
+
+let lastWakeToken = 0;
+
+/** The wake's time in ms, made unique so two wakes never share a token. */
+function nextWakeToken(): number {
+  lastWakeToken = Math.max(Date.now(), lastWakeToken + 1);
+  return lastWakeToken;
+}
+
+/** Start a device's result for the wake sent at `at` (ms). */
+function startWakeResult(id: string, at: number, phase: WakeResultPhase): void {
+  wakeResults.set(id, { at, phase });
+  publishWakeResults();
+}
+
+/** Whether `at` is still the device's latest wake (a newer wake replaces the result). */
+function isLatestWake(id: string, at: number): boolean {
+  return wakeResults.get(id)?.at === at;
+}
+
+/** Update the result of the wake sent at `at`; a follow-up for an older wake is ignored. */
+function updateWakeResult(id: string, at: number, phase: WakeResultPhase): void {
+  if (!isLatestWake(id, at)) return;
+  wakeResults.set(id, { at, phase });
+  publishWakeResults();
+}
+
+/** The device's last manual-wake result while it is younger than WAKE_RESULT_MS. */
+export function useWakeResult(id: string): WakeResult | null {
+  const [state, setState] = useState(() => wakeResults.get(id) ?? null);
+  useEffect(() => {
+    const update = () => setState(wakeResults.get(id) ?? null);
+    wakeResultSubscribers.add(update);
+    update();
+    return () => {
+      wakeResultSubscribers.delete(update);
+    };
+  }, [id]);
+  return state;
+}
+
+/** Remove one device. Toasts on failure; resolves true only when it was removed. */
+export async function deleteDevice(id: string): Promise<boolean> {
   try {
     const current = await listDevices();
     const result = await writeList(current.filter((d) => d.id !== id));
-    if (!result.ok) toastInfo(S.deleteFailed, result.error);
+    if (result.ok) return true;
+    toastInfo(S.deleteFailed, result.error);
   } catch (e) {
     toastError(S.deleteFailed, e);
   }
+  return false;
 }
 
 /** Accept a list that import_config already saved. */
@@ -210,9 +334,88 @@ async function sendManualWake(
       return null;
     }
     const sentSomething = record.outcome === "sent" || record.outcome === "partial";
-    toastDispatch(record, sentSomething && (await offHome) ? TOAST.offHomeNetwork : undefined);
-    setTimeout(requestStatusRefresh, 4_000);
-    scheduleNoReplyCheck(record, devices, before, requestStatusRefresh);
+    const checkable = new Set(checkableDevices(record, devices).map((d) => d.id));
+    toastDispatch(record, sentSomething && (await offHome) ? TOAST.offHomeNetwork : undefined, checkable.size > 0);
+    // One token per wake: follow-ups only touch results (and toast for devices)
+    // this wake still owns, so a slow check can't overwrite a newer wake's row.
+    const at = nextWakeToken();
+    for (const [id, result] of Object.entries(record.results)) {
+      if (result.status === "sent") startWakeResult(id, at, checkable.has(id) ? "checking" : "sent");
+    }
+    later(requestStatusRefresh, 4_000);
+    scheduleNoReplyCheck(record, devices, before, requestStatusRefresh, {
+      isCurrent: (id) => isLatestWake(id, at),
+      onResult: (id, value, final) => {
+        if (value === "awake") updateWakeResult(id, at, "awake");
+        else if (value === "unknown") updateWakeResult(id, at, "sent");
+        else if (final) updateWakeResult(id, at, "asleep");
+      },
+    });
     return record;
   });
+}
+
+/**
+ * Plugin unload: cancel pending follow-up checks and status refreshes and drop
+ * per-session state, so nothing fires or toasts after the plugin is gone.
+ */
+export function cancelPendingChecks(): void {
+  cancelPendingTimers();
+  wakeResults.clear();
+  wakingIds.clear();
+  wakingAll = false;
+  focusRequest = null;
+  forcedUpdate = null;
+  detachWindowFocus?.();
+}
+
+// The last Check for updates answer. With the daily check off, update_info(false)
+// on the next panel open says "disabled" and would hide what the user just
+// checked, so the panel keeps showing this for the rest of the session.
+let forcedUpdate: UpdateInfo | null = null;
+
+export function rememberForcedUpdate(info: UpdateInfo): void {
+  forcedUpdate = info;
+}
+
+export function lastForcedUpdate(): UpdateInfo | null {
+  return forcedUpdate;
+}
+
+let detachWindowFocus: (() => void) | null = null;
+const WINDOW_FOCUS_WAIT_MS = 120_000;
+
+/**
+ * Request focus on `id` when `win` gets window focus back, once, within two
+ * minutes. Decky's install prompt opens in Steam's main window and gives no close
+ * callback, so the Quick Access window regaining focus is the signal that it closed.
+ */
+export function focusWhenWindowReturns(win: Window, id: string): void {
+  // Longer than a modal's request: the panel may be rebuilt and its status
+  // reloaded before the target exists again.
+  onWindowFocusOnce(win, () => requestFocus(id, RETURN_FOCUS_MS));
+}
+
+const RETURN_FOCUS_MS = 8_000;
+
+/**
+ * Run `fn` the next time `win` gets window focus, once, within two minutes.
+ * Menus and prompts that open outside the Quick Access window give no close
+ * callback; the window regaining focus is the signal. Only one waits at a time
+ * (a new one replaces the old), and plugin unload detaches it. Returns detach.
+ */
+export function onWindowFocusOnce(win: Window, fn: () => void): () => void {
+  detachWindowFocus?.();
+  const onFocus = () => {
+    detach();
+    fn();
+  };
+  const detach = () => {
+    win.removeEventListener("focus", onFocus);
+    if (detachWindowFocus === detach) detachWindowFocus = null;
+  };
+  win.addEventListener("focus", onFocus);
+  detachWindowFocus = detach;
+  later(detach, WINDOW_FOCUS_WAIT_MS);
+  return detach;
 }

@@ -130,7 +130,7 @@ Decky Loader:
    (the backend log shows one lookup).
 5. For the update check, install a build whose packaged version is older than the
    latest release (`scripts/package.sh --version 0.0.1`). Open the panel with **Check
-   daily** still off (the default): the Updates section says "Automatic checks are off"
+   daily** still off (the default): the Updates section says "Automatic checks are off · v0.0.1"
    and the backend log shows no update request. Press **Check for updates** and check
    the "Update available" row appears under the devices; press **Update** in that row
    and check Decky's own confirmation names Wake Dispatch and the new version

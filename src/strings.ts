@@ -131,10 +131,11 @@ export const EDITOR = {
   checkLabel: "Check if it's awake",
   checkNone: "Don't check",
   checkSunshine: "Game streaming (Sunshine)",
+  checkRemotePlay: "Steam Remote Play",
   checkSsh: "SSH",
   checkRdp: "Remote Desktop",
   checkOther: "Another port…",
-  checkHint: "Shows Awake or Asleep next to the device.",
+  checkHint: "Pick the app you stream or connect with: Awake then means that app is ready, not just the PC.",
   checkOtherHint: "Set the port under More settings.",
   checkNeedsHost: "Pick the PC from the network, or turn this off.",
 

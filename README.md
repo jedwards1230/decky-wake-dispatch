@@ -101,10 +101,16 @@ Under **Check if it's awake**, choose how the plugin should tell whether the PC 
 | Choice | Port checked |
 | --- | --- |
 | Don't check | none; the device shows no status |
-| Game streaming (Sunshine) | TCP 47989, the port of the Sunshine game-stream host (used with Moonlight); Steam Remote Play itself is not checked |
+| Game streaming (Sunshine) | TCP 47989, the port of the Sunshine game-stream host (used with Moonlight) |
+| Steam Remote Play | TCP 27036, which Steam listens on once it is running and signed in |
 | SSH | TCP 22 |
 | Remote Desktop | TCP 3389 |
 | Another port… | any TCP port, set under More settings |
+
+Choose the port of the app you actually stream or connect with. A PC can answer on one
+port while the app you want is still starting, so checking that app's own port means
+"Awake" also tells you it is ready: Sunshine if you use Moonlight, Steam Remote Play if
+you stream from Steam, SSH or Remote Desktop if that's how you connect.
 
 A status check needs the PC's address. Pick from network fills it in; otherwise set it
 under More settings, or Save asks you to.

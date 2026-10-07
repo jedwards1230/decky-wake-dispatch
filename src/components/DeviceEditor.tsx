@@ -38,7 +38,7 @@ type FieldName =
   | "broadcast"
   | "secureon";
 type Errors = Partial<Record<FieldName, string>>;
-type CheckMode = "none" | "sunshine" | "ssh" | "rdp" | "other";
+type CheckMode = "none" | "sunshine" | "remoteplay" | "ssh" | "rdp" | "other";
 type AutoChoice = "never" | "boot" | "resume" | "both";
 
 interface Props {
@@ -62,11 +62,12 @@ const FIELD_ORDER: readonly FieldName[] = [
 ];
 const MORE_FIELDS: readonly FieldName[] = ["host", "status_port", "port", "broadcast", "secureon"];
 
-const PRESET_PORTS: Partial<Record<CheckMode, number>> = { sunshine: 47989, ssh: 22, rdp: 3389 };
+const PRESET_PORTS: Partial<Record<CheckMode, number>> = { sunshine: 47989, remoteplay: 27036, ssh: 22, rdp: 3389 };
 
 const CHECK_OPTIONS: { data: CheckMode; label: string }[] = [
   { data: "none", label: EDITOR.checkNone },
   { data: "sunshine", label: EDITOR.checkSunshine },
+  { data: "remoteplay", label: EDITOR.checkRemotePlay },
   { data: "ssh", label: EDITOR.checkSsh },
   { data: "rdp", label: EDITOR.checkRdp },
   { data: "other", label: EDITOR.checkOther },

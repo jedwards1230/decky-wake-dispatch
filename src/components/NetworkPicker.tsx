@@ -42,12 +42,19 @@ export function displayName(hostname: string): string {
   return hostname.replace(/\.(local|lan)\.?$/i, "");
 }
 
-/** Scan results update entries with the same MAC and add new ones; a name is never lost. */
-function merge(current: Neighbour[], found: Neighbour[]): Neighbour[] {
+/**
+ * Update entries with the same MAC and add new ones; a name is never lost.
+ * `names` says whose name wins when both have one: a scan's ("incoming": mDNS
+ * beats reverse DNS) or the list's ("existing": a Refresh only reads reverse
+ * DNS, so it fills in missing names but never replaces a name a scan found).
+ */
+function merge(current: Neighbour[], found: Neighbour[], names: "incoming" | "existing"): Neighbour[] {
   const byMac = new Map(current.map((n) => [n.mac, n]));
   for (const n of found) {
     const prev = byMac.get(n.mac);
-    byMac.set(n.mac, { ...n, hostname: n.hostname ?? prev?.hostname ?? null });
+    const hostname =
+      names === "existing" ? (prev?.hostname ?? n.hostname ?? null) : (n.hostname ?? prev?.hostname ?? null);
+    byMac.set(n.mac, { ...n, hostname });
   }
   return [...byMac.values()];
 }
@@ -109,7 +116,7 @@ export function NetworkPicker({ onPick, closeModal }: Props) {
       .catch(() => current() && setGateway(null));
     neighbours()
       .then((list) => {
-        if (current()) setItems((prev) => merge(prev ?? [], list));
+        if (current()) setItems((prev) => merge(prev ?? [], list, "existing"));
       })
       .catch((e: unknown) => {
         console.error("[Wake Dispatch] neighbours failed", e);
@@ -149,7 +156,7 @@ export function NetworkPicker({ onPick, closeModal }: Props) {
       const result = await scanNetwork(confirmAway);
       if (result.ok) {
         if (mounted.current) {
-          setItems((prev) => merge(prev ?? [], result.neighbours));
+          setItems((prev) => merge(prev ?? [], result.neighbours, "incoming"));
           setFailed(false);
           setGateway(result.gateway);
         }

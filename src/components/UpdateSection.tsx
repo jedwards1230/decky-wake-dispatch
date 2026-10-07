@@ -4,7 +4,6 @@ import {
   DialogButtonSecondary,
   DialogFooter,
   DialogHeader,
-  Field,
   Focusable,
   ModalRoot,
   PanelSection,
@@ -23,7 +22,10 @@ import { canInstallInPlace, requestInstall } from "../update";
 import { focusSoon } from "./focus";
 import { InlineError, hintOrError } from "./InlineError";
 
-/** One line saying where updates stand. "Off" is a choice, not a problem, so it isn't styled as one. */
+/**
+ * One line saying where updates stand, and the installed version once. "Off" is
+ * a choice, not a problem, so it isn't styled as one.
+ */
 function statusLine(info: UpdateInfo | null): string | null {
   if (info === null) return null;
   switch (info.status) {
@@ -32,14 +34,12 @@ function statusLine(info: UpdateInfo | null): string | null {
     case "current":
       // The backend reports an unreadable installed version as unavailable, so it is set here.
       return UPDATE.current(info.installed ?? info.latest ?? "");
-    case "unavailable":
-      return info.error ? UPDATE.unavailableWith(info.error) : UPDATE.unavailable;
-    case "unchecked":
-      return info.enabled ? UPDATE.notChecked : UPDATE.autoOff;
-    case "disabled":
-    default:
-      return UPDATE.autoOff;
   }
+  let line: string;
+  if (info.status === "unavailable") line = info.error ? UPDATE.unavailableWith(info.error) : UPDATE.unavailable;
+  else if (info.status === "unchecked" && info.enabled) line = UPDATE.notChecked;
+  else line = UPDATE.autoOff;
+  return info.installed ? UPDATE.withVersion(line, info.installed) : line;
 }
 
 /** Manual install: Decky's Install Plugin from URL, with the URL as copyable text. */
@@ -116,7 +116,7 @@ export function UpdateRow({ info }: { info: UpdateInfo | null }) {
   );
 }
 
-/** Updates section: where things stand, Check for updates, the Check daily toggle, the installed version. */
+/** Updates section: Check for updates under where things stand, then the Check daily toggle. */
 export function UpdateSection({ update }: { update: UpdateState }) {
   const { info, checking, checkNote, toggleError, pendingEnabled, toggleKey, checkNow, setDaily } = update;
   const line = statusLine(info);
@@ -144,15 +144,10 @@ export function UpdateSection({ update }: { update: UpdateState }) {
   }, [focus?.seq, loaded, info?.status]);
   return (
     <PanelSection title={UPDATE.title}>
-      {line && (
-        <PanelSectionRow>
-          <Field description={line} bottomSeparator="none" focusable={false} />
-        </PanelSectionRow>
-      )}
       <PanelSectionRow>
         {/* Never disabled while checking (it holds focus); repeat presses are ignored. */}
         <div ref={checkRef}>
-          <ButtonItem layout="below" description={checkNote ?? undefined} onClick={checkNow}>
+          <ButtonItem layout="below" label={line ?? undefined} description={checkNote ?? undefined} onClick={checkNow}>
             {checking ? UPDATE.checking : UPDATE.checkNow}
           </ButtonItem>
         </div>
@@ -169,11 +164,6 @@ export function UpdateSection({ update }: { update: UpdateState }) {
           />
         </div>
       </PanelSectionRow>
-      {info?.installed && (
-        <PanelSectionRow>
-          <Field description={UPDATE.installed(info.installed)} bottomSeparator="none" focusable={false} />
-        </PanelSectionRow>
-      )}
     </PanelSection>
   );
 }

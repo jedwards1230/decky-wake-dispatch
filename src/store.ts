@@ -187,7 +187,12 @@ function publishWakeResults(): void {
 
 // Polls the status of just-woken devices. Module-level, so it keeps going while
 // the Quick Access menu is closed; it only publishes through the store.
-const wakePoller = new WakePoller((ids) => status(ids), { set: setTimeout, clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>) });
+// Wrap the timer functions: Steam's CEF throws "Illegal invocation" when setTimeout
+// is called as a method of another object (timers.set(fn, ms)).
+const wakePoller = new WakePoller((ids) => status(ids), {
+  set: (fn, ms) => setTimeout(fn, ms),
+  clear: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
+});
 
 let lastWakeToken = 0;
 

@@ -17,6 +17,17 @@ def route_line(iface: str, dest: str, gateway: str, flags: str, metric: int) -> 
 # 192.168.1.1 little-endian = 0101A8C0; 192.0.2.1 = 010200C0
 HOME_ROUTE = ROUTE_HEADER + route_line("wlan0", "00000000", "0101A8C0", "0003", 600)
 
+ARP_HEADER = "IP address       HW type     Flags       HW address            Mask     Device\n"
+
+
+def arp_line(ip: str, mac: str, iface: str = "wlan0", flags: str = "0x2") -> str:
+    return f"{ip:<16} 0x1         {flags:<11} {mac}     *        {iface}\n"
+
+
+# The home router (192.168.1.1 on wlan0) as a complete ARP entry.
+ROUTER_MAC = "aa:bb:cc:dd:ee:0a"
+ROUTER_ARP = ARP_HEADER + arp_line("192.168.1.1", ROUTER_MAC.upper())
+
 
 def write_network(fake: Path, routes: str | None, states: dict[str, str] | None = None) -> None:
     if routes is not None:
@@ -38,6 +49,7 @@ def device(n: int = 1, **overrides: Any) -> dict[str, Any]:
         "secureon": None,
         "auto": [],
         "home_gateway": None,
+        "home_gateway_mac": None,
     }
     base.update(overrides)
     return base

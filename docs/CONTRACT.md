@@ -29,6 +29,7 @@ interface Device {
   secureon: string | null; // optional 6-byte SecureOn password, normalised like a MAC
   auto: AutoTrigger[];     // opt-in automation, default []
   home_gateway: string | null; // automation only fires when the current default gateway equals this; null = any network
+  home_gateway_mac: string | null; // the home router's MAC, normalised like `mac`; always null when home_gateway is null; null = unknown (see §4 Home-network gate)
 }
 
 interface DeviceResult { name: string; status: "sent" | "error" | "skipped"; error?: string }
@@ -37,7 +38,7 @@ interface DispatchRecord {
   trigger: Trigger;
   at: number;                       // unix seconds
   outcome: "sent" | "partial" | "failed" | "skipped" | "no_network";
-  reason: string | null;            // plain-language, e.g. "Not on home network", "No devices opted in"
+  reason: string | null;            // plain-language, e.g. "Not on home network", "Different network (same router address)", "No devices opted in"
   results: Record<string, DeviceResult>; // keyed by device id
 }
 
@@ -59,7 +60,7 @@ type FindResult =
   | { ok: true; ip: string; mac: string; name: string | null;
       name_source: "typed" | "dns" | null } // typed = the hostname the user entered
   | { ok: false; error: string; busy?: true; cancelled?: true };
-interface Network { iface: string; gateway: string } // current default route
+interface Network { iface: string; gateway: string; gateway_mac: string | null } // current default route; gateway_mac = complete ARP entry for the gateway on iface, null if none
 type Saved = { ok: true; devices: Device[] } | { ok: false; error: string; field?: string; index?: number };
 
 type UpdateStatus = "disabled" | "unchecked" | "current" | "available" | "unavailable";
@@ -117,15 +118,32 @@ Argument tolerance:
 ## §3 Event
 
 `decky.emit("dispatched", record: DispatchRecord)` after every `wake` (manual or
-automatic), including skipped and no-network outcomes for automation.
+automatic), including skipped and no-network outcomes for automation. A resume ignored
+by the cooldown (§4) is not a wake and emits nothing.
 
 ## §4 Behaviour rules
 
 - Manual wake: always sends (no gateway gate), burst at 0/1/2 s, network wait 5 s.
-- Automatic wake: only devices with the trigger in `auto` and `home_gateway` null
-  or equal to the current gateway; burst at 0/2/5/10/20 s; network wait 60 s on
-  boot, 20 s on resume. A device whose gateway doesn't match is `skipped` with
-  reason "Not on home network".
+- Automatic wake: only devices with the trigger in `auto` that pass the home-network
+  gate; burst at 0/2/5/10/20 s; network wait 60 s on boot, 20 s on resume.
+- Home-network gate (automatic wakes only; manual wakes are never gated), checked once
+  per wake right after the route is found: `home_gateway` null -> wake. Otherwise a
+  current gateway IP that differs -> `skipped`, reason "Not on home network". IP equal,
+  the device has a `home_gateway_mac`, and the current router's MAC is known (a complete
+  `/proc/net/arp` entry, flags 0x2, for the gateway IP on the route's interface, read
+  once per wake and only when some device has a MAC) but differs -> `skipped`, reason
+  "Different network (same router address)". Current router MAC unknown (ARP may not
+  have it yet right after resume) or no stored MAC -> the IP check alone decides. The
+  decision is logged. A wake whose only skips are these two reasons and that sent to
+  others is `partial` with "Some devices weren't on their home network".
+- Router MAC capture on `save_devices` and `import_config`: for each device with
+  `home_gateway` set, an input `home_gateway_mac` (non-null) is validated like a MAC
+  (failure -> field error `home_gateway_mac`) and kept; an explicit `null` is kept (the
+  user cleared it); with the key absent, the saved device with the same id (else the
+  same `mac`) supplies its MAC if it has the same `home_gateway`, else the MAC is
+  captured from ARP when `home_gateway` equals the current default gateway, else null.
+  With `home_gateway` null the field is dropped (null) without validation. Settings
+  files written before this field load with null.
 - Boot: on `_main`, if `/proc/sys/kernel/random/boot_id` differs from the saved one,
   wait for a route; save the boot_id only once a route was found, then dispatch.
   Zero devices configured must not crash (record outcome `skipped`, reason
@@ -135,6 +153,12 @@ automatic), including skipped and no-network outcomes for automation.
   ignores wall-clock steps; wall time only where it is unavailable) means the
   process was frozen in suspend -> dispatch `resume`. A resume that arrives while
   another is still running is dropped. Log resume -> route-up time.
+- Resume cooldown: after a resume dispatch whose outcome is `sent` or `partial`, resumes
+  detected less than 600 s (measured on the same `CLOCK_BOOTTIME` clock, from the
+  detection that led to that dispatch) later are ignored: logged "Resume detected within
+  the cooldown; ignoring", nothing dispatched, recorded or emitted. `skipped`,
+  `no_network` and `failed` resume outcomes don't start it. Boot and manual wakes are
+  never affected. The cooldown lives in memory only (a plugin reload clears it).
 - Status check: the host is resolved first (an IP literal needs no lookup; a name is
   looked up with a 1 s timeout on its own daemon thread and the answer cached for 30 s,
   a miss for 10 s), then a TCP connect to the numeric address with a 1 s timeout, and

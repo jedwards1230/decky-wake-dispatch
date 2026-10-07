@@ -347,3 +347,86 @@ async def test_network_wait_values() -> None:
     for trigger in ("manual", "boot", "resume"):
         await d.dispatch(trigger, None)
     assert seen == [5, 60, 20]
+
+
+# -- home-network gate: router MAC --------------------------------------------
+
+ROUTER = "aa:bb:cc:dd:ee:0a"
+
+
+def at_home(n: int, **overrides):
+    return device(n, auto=["boot", "resume"], home_gateway="192.168.1.1", **overrides)
+
+
+async def test_gate_mac_match_sends() -> None:
+    rec = Recorder([at_home(1, home_gateway_mac=ROUTER)])
+    d = make(rec, gateway_mac=lambda _route: ROUTER)
+    assert (await d.dispatch("resume"))["outcome"] == "sent"
+
+
+async def test_gate_mac_mismatch_skips_with_reason(caplog) -> None:
+    rec = Recorder([at_home(1, home_gateway_mac=ROUTER), at_home(2)])
+    routes: list[dict] = []
+    d = make(rec, gateway_mac=lambda route: routes.append(route) or "aa:bb:cc:dd:ee:0b")
+    with caplog.at_level("INFO", logger="decky-test"):
+        record = await d.dispatch("boot")
+    assert record["results"]["pc-1"] == {
+        "name": "Gaming PC 1",
+        "status": "skipped",
+        "error": "Different network (same router address)",
+    }
+    assert record["results"]["pc-2"]["status"] == "sent"  # no stored MAC: IP only
+    assert (record["outcome"], record["reason"]) == (
+        "partial",
+        "Some devices weren't on their home network",
+    )
+    assert routes == [HOME]  # ARP read once per wake
+    assert any("skipping pc-1 (Different network" in r.getMessage() for r in caplog.records)
+
+
+async def test_gate_mac_mismatch_only_device_is_skipped() -> None:
+    rec = Recorder([at_home(1, home_gateway_mac=ROUTER)])
+    d = make(rec, gateway_mac=lambda _route: "aa:bb:cc:dd:ee:0b")
+    record = await d.dispatch("resume")
+    assert (record["outcome"], record["reason"]) == (
+        "skipped",
+        "Different network (same router address)",
+    )
+    assert d.sent == []
+
+
+async def test_gate_unknown_router_mac_falls_back_to_ip(caplog) -> None:
+    rec = Recorder([at_home(1, home_gateway_mac=ROUTER)])
+    d = make(rec, gateway_mac=lambda _route: None)
+    with caplog.at_level("INFO", logger="decky-test"):
+        assert (await d.dispatch("resume"))["outcome"] == "sent"
+    assert any("checking its IP only" in r.getMessage() for r in caplog.records)
+
+
+async def test_gate_ip_mismatch_wins_over_mac() -> None:
+    rec = Recorder([device(1, auto=["boot"], home_gateway="198.51.100.1", home_gateway_mac=ROUTER)])
+    record = await make(rec, gateway_mac=lambda _route: ROUTER).dispatch("boot")
+    assert record["reason"] == "Not on home network"
+
+
+async def test_gate_reads_arp_only_when_needed() -> None:
+    def no_read(_route):
+        raise AssertionError("ARP read without a device that needs it")
+
+    rec = Recorder([at_home(1)])
+    assert (await make(rec, gateway_mac=no_read).dispatch("boot"))["outcome"] == "sent"
+
+
+async def test_gate_default_reader_uses_proc_arp(sandbox) -> None:
+    from helpers import ARP_HEADER, arp_line
+
+    rec = Recorder([at_home(1, home_gateway_mac=ROUTER)])
+    (sandbox["fake"] / "arp").write_text(ARP_HEADER + arp_line("192.168.1.1", "aa:bb:cc:dd:ee:0b"))
+    record = await make(rec).dispatch("boot")
+    assert record["reason"] == "Different network (same router address)"
+
+
+async def test_manual_ignores_router_mac() -> None:
+    rec = Recorder([at_home(1, home_gateway_mac=ROUTER)])
+    d = make(rec, gateway_mac=lambda _route: "aa:bb:cc:dd:ee:0b")
+    assert (await d.dispatch("manual", None))["outcome"] == "sent"

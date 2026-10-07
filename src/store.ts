@@ -92,6 +92,9 @@ export async function saveDevice(draft: Partial<Device>): Promise<SaveOutcome> {
   const list: Partial<Device>[] = [...current];
   if (index >= 0) {
     list[index] = { ...current[index], ...draft };
+    // A draft without home_gateway_mac lets the backend keep or capture it
+    // (docs/CONTRACT.md §4); the saved value must not ride along unasked.
+    if (!("home_gateway_mac" in draft)) delete list[index].home_gateway_mac;
     return writeList(list, index);
   }
   list.push({ ...draft, id: "" });

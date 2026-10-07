@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from helpers import HOME_ROUTE, device, write_network
+from helpers import HOME_ROUTE, ROUTER_ARP, ROUTER_MAC, device, write_network
 
 import main
 import wake_dispatch
@@ -69,7 +69,13 @@ async def test_current_network(sandbox) -> None:
     plugin = main.Plugin()
     assert await plugin.current_network() is None
     write_network(sandbox["fake"], HOME_ROUTE, {"wlan0": "up"})
-    assert await plugin.current_network() == {"iface": "wlan0", "gateway": "192.168.1.1"}
+    assert await plugin.current_network() == {
+        "iface": "wlan0",
+        "gateway": "192.168.1.1",
+        "gateway_mac": None,
+    }
+    (sandbox["fake"] / "arp").write_text(ROUTER_ARP)
+    assert (await plugin.current_network())["gateway_mac"] == "aa:bb:cc:dd:ee:0a"
 
 
 async def test_status_and_neighbours_empty() -> None:
@@ -338,3 +344,29 @@ async def test_main_after_unload_reopens_the_resolver(decky_env, sandbox) -> Non
     await plugin._main()
     assert await netinfo.reverse_lookup("192.0.2.8", 1.0, lambda ip: ("pc", [], [ip])) == "pc"
     await plugin._unload()
+
+
+async def test_save_captures_router_mac_on_home_network(decky_env, sandbox) -> None:
+    write_network(sandbox["fake"], HOME_ROUTE, {"wlan0": "up"})
+    (sandbox["fake"] / "arp").write_text(ROUTER_ARP)
+    plugin = main.Plugin()
+    # The current editor doesn't send home_gateway_mac: the backend fills it in.
+    draft = {"name": "Office PC", "mac": "aa:bb:cc:dd:ee:01", "home_gateway": "192.168.1.1"}
+    saved = await plugin.save_devices([draft])
+    assert saved["devices"][0]["home_gateway_mac"] == ROUTER_MAC
+    # Saved again away from home (no route), the stored MAC is kept.
+    (sandbox["fake"] / "route").write_text("")
+    again = await plugin.save_devices([{**draft, "id": saved["devices"][0]["id"]}])
+    assert again["devices"][0]["home_gateway_mac"] == ROUTER_MAC
+    bad = await plugin.save_devices([{**draft, "home_gateway_mac": "nope"}])
+    assert (bad["ok"], bad["field"], bad["index"]) == (False, "home_gateway_mac", 0)
+
+
+async def test_old_settings_file_without_router_mac_loads(decky_env) -> None:
+    old = device(1, home_gateway="192.168.1.1")
+    del old["home_gateway_mac"]
+    path = Path(decky_env.DECKY_PLUGIN_SETTINGS_DIR, "devices.json")
+    path.write_text(json.dumps({"version": 1, "devices": [old]}))
+    [loaded] = await main.Plugin().list_devices()
+    assert loaded == {**old, "home_gateway_mac": None}
+    assert not list(path.parent.glob("devices.json.bak-*"))

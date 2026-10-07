@@ -234,3 +234,101 @@ async def test_cancel_never_yields_and_forgets_tasks() -> None:
     await asyncio.gather(*cancelled, return_exceptions=True)
     assert boot.cancelled() and watch.cancelled() and resume.cancelled()
     assert auto.cancel() == []
+
+
+# -- resume cooldown ----------------------------------------------------------
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def fire(auto: Automation):
+    task = auto._fire_resume(60)
+    return None if task is None else await within(task)
+
+
+async def test_resume_within_cooldown_ignored_after_sent(caplog) -> None:
+    rec = Recorder([device(1, auto=["resume"])])
+    clock = Clock()
+    auto = build(rec, clock=clock)
+    assert (await fire(auto))["outcome"] == "sent"
+    clock.now += 599
+    with caplog.at_level("INFO", logger="decky-test"):
+        assert await fire(auto) is None
+    assert "Resume detected within the cooldown; ignoring" in [
+        r.getMessage() for r in caplog.records
+    ]
+    assert len(rec.events) == 1
+    clock.now += 1  # 600 s after the resume that sent
+    assert (await fire(auto))["outcome"] == "sent"
+    assert len(rec.events) == 2
+
+
+async def test_partial_resume_starts_cooldown() -> None:
+    rec = Recorder(
+        [
+            device(1, auto=["resume"]),
+            device(2, auto=["resume"], home_gateway="198.51.100.1"),
+        ]
+    )
+    clock = Clock()
+    auto = build(rec, clock=clock)
+    assert (await fire(auto))["outcome"] == "partial"
+    clock.now += 60
+    assert await fire(auto) is None
+
+
+@pytest.mark.parametrize(
+    ("devices", "route", "sender_fails", "outcome"),
+    [
+        ([device(1, auto=["resume"], home_gateway="198.51.100.1")], HOME, False, "skipped"),
+        ([device(1)], HOME, False, "skipped"),
+        ([device(1, auto=["resume"])], None, False, "no_network"),
+        ([device(1, auto=["resume"])], HOME, True, "failed"),
+    ],
+)
+async def test_unsent_resume_does_not_start_cooldown(devices, route, sender_fails, outcome) -> None:
+    rec = Recorder(devices)
+    clock = Clock()
+    auto = build(rec, route=route, clock=clock)
+    if sender_fails:
+
+        def fail(*_a):
+            raise OSError(101, "unreachable")
+
+        auto.dispatcher._sender = fail
+    assert (await fire(auto))["outcome"] == outcome
+    clock.now += 30
+    assert await fire(auto) is not None
+    assert len(rec.events) == 2
+
+
+async def test_cooldown_is_injectable_and_skips_boot() -> None:
+    rec = Recorder([device(1, auto=["boot", "resume"])])
+    clock = Clock()
+    auto = build(rec, clock=clock, cooldown=10.0)
+    assert (await fire(auto))["outcome"] == "sent"
+    assert (await auto.run_boot())["outcome"] == "sent"  # boot is never gated
+    clock.now += 5
+    assert await fire(auto) is None
+    clock.now += 5
+    assert await fire(auto) is not None
+
+
+async def test_watcher_ignores_second_suspend_within_cooldown() -> None:
+    rec = Recorder([device(1, auto=["resume"])])
+    clock = FakeClock()
+    clock.jumps = {3: 300.0, 6: 100.0, 9: 400.0}  # resumes 305 s and 410 s apart
+    clock.stop_after = 12
+    auto = build(rec, sleep=clock.sleep, clock=clock)
+    with pytest.raises(Stop):
+        await within(auto.watch_resume())
+    await within(asyncio.gather(*auto._resume_tasks))
+    # tick 3 sends; tick 6 is 120 s later (ignored); tick 9 is 535 s after tick 3
+    # (still within 600 s, ignored).
+    assert [r["trigger"] for _, r in rec.events] == ["resume"]

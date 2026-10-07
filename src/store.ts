@@ -391,10 +391,20 @@ const WINDOW_FOCUS_WAIT_MS = 120_000;
  * callback, so the Quick Access window regaining focus is the signal that it closed.
  */
 export function focusWhenWindowReturns(win: Window, id: string): void {
+  onWindowFocusOnce(win, () => requestFocus(id));
+}
+
+/**
+ * Run `fn` the next time `win` gets window focus, once, within two minutes.
+ * Menus and prompts that open outside the Quick Access window give no close
+ * callback; the window regaining focus is the signal. Only one waits at a time
+ * (a new one replaces the old), and plugin unload detaches it. Returns detach.
+ */
+export function onWindowFocusOnce(win: Window, fn: () => void): () => void {
   detachWindowFocus?.();
   const onFocus = () => {
     detach();
-    requestFocus(id);
+    fn();
   };
   const detach = () => {
     win.removeEventListener("focus", onFocus);
@@ -403,4 +413,5 @@ export function focusWhenWindowReturns(win: Window, id: string): void {
   win.addEventListener("focus", onFocus);
   detachWindowFocus = detach;
   later(detach, WINDOW_FOCUS_WAIT_MS);
+  return detach;
 }

@@ -2,6 +2,8 @@
 // focusing the element is enough. A second try ~250 ms later covers focus being
 // taken back right after the first: a closing modal hands focus to whatever
 // opened it a moment after it unmounts, and a new modal's footer grabs it on mount.
+import { later } from "../notify";
+
 const FOCUSABLE = ".DialogButton, button, input, [tabindex]";
 const RETRY_MS = 250;
 
@@ -32,11 +34,11 @@ export interface FocusSoonOptions {
 export function focusSoon(get: () => HTMLElement | null | undefined, options: FocusSoonOptions = {}): void {
   const { centre = false, retry = "if-lost" } = options;
   let ours: HTMLElement | null = null;
-  setTimeout(() => {
+  later(() => {
     ours = resolve(get());
     if (ours) focusNow(ours, centre);
   }, 0);
-  setTimeout(() => {
+  later(() => {
     const target = resolve(get());
     if (!target) return;
     const active = target.ownerDocument.activeElement;

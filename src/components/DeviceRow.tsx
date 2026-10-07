@@ -4,7 +4,7 @@ import { FaEllipsisH } from "react-icons/fa";
 
 import type { Device, Status } from "../api";
 import { automationSummary, relativeTime } from "../format";
-import { WAKE_RESULT_MS, requestFocus, useFocusRequest, useWakeResult, useWaking, wakeManual, type WakeResult } from "../store";
+import { WAKE_RESULT_MS, onWindowFocusOnce, requestFocus, useFocusRequest, useWakeResult, useWaking, wakeManual, type WakeResult } from "../store";
 import { ROW, S } from "../strings";
 import { AccessibleText } from "./AccessibleText";
 import { confirmDeleteDevice, openDeviceEditor } from "./DeviceEditor";
@@ -45,15 +45,17 @@ function showRowMenu(device: Device, from: HTMLElement | null): void {
   const win = doc?.defaultView ?? null;
   const findMore = () => doc?.querySelector<HTMLElement>(`[${MORE_ATTR}="${CSS.escape(device.id)}"]`) ?? null;
   let picked = false;
+  let detach = () => {};
   const refocus = () => {
-    win?.removeEventListener("focus", refocus);
+    detach();
     if (!picked) focusSoon(findMore, { retry: "always" });
   };
   // The panel's window regains focus when the menu closes, however it closed.
-  win?.addEventListener("focus", refocus);
+  // The listener expires after two minutes and is dropped on plugin unload.
+  if (win) detach = onWindowFocusOnce(win, refocus);
   const choose = (action: () => void) => () => {
     picked = true;
-    win?.removeEventListener("focus", refocus);
+    detach();
     action();
   };
   showContextMenu(

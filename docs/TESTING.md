@@ -120,6 +120,10 @@ Decky Loader:
    settings → Developer → **Install Plugin from ZIP File**. Saved devices are kept
    across reinstalls.
 3. Exercise the change: add a device, wake it, and check the status and notifications.
+   With a status check (for example **Steam Remote Play** on a PC running Steam), wake
+   a sleeping PC: "<name> is awake" should appear within a few seconds of the PC
+   answering, and the row should go from "Checking…" to "Awake". Wake a PC that stays
+   asleep: a single "hasn't woken up" notification should come after about a minute.
    For automation, enable it on a device, then reboot or suspend for longer than 20
    seconds and check the "Last automatic wake" line. For panel changes, also drive it
    with the D-pad only: focus should never vanish (after Wake, Save, Cancel, or Delete…
